@@ -5,7 +5,7 @@ from __future__ import annotations
 import sys
 
 from .config import Config
-from .sources import Http
+from .sources import Http, redact
 
 TELEGRAM_API = "https://api.telegram.org"
 
@@ -52,9 +52,9 @@ class Notifier:
             try:
                 telegram(self.http, cfg.telegram_bot_token, cfg.telegram_chat_id, text)
             except Exception as e:
-                print(f"[warn] telegram alert failed: {e}", file=sys.stderr)
+                print(redact(f"[warn] telegram alert failed: {e}"), file=sys.stderr)
         if cfg.discord_webhook_url:
             try:
                 discord(self.http, cfg.discord_webhook_url, text)
             except Exception as e:
-                print(f"[warn] discord alert failed: {e}", file=sys.stderr)
+                print(redact(f"[warn] discord alert failed: {e}"), file=sys.stderr)

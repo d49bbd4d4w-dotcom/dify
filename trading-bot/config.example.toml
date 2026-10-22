@@ -22,6 +22,15 @@ db_path = "tradebot.db"
 thesis_model = "claude-opus-5-5"
 thesis_effort = "low"
 
+# ----- Sports (needs a free key from https://the-odds-api.com) -----
+# odds_api_key = ""          # or set the ODDS_API_KEY environment variable
+sports_min_edge = 0.02       # need >= 2 cents expected profit per contract after fees
+sports_max_disagreement = 0.10
+sports_poll_minutes = 30     # slowed down automatically to make your credits last the month
+# sports_series = ["KXNFLGAME", "KXNBAGAME"]   # default: every supported sport
+
+timezone = "America/Los_Angeles"   # for times shown in alerts
+
 # Alerts. Easiest is to set the environment variables TELEGRAM_BOT_TOKEN and
 # TELEGRAM_CHAT_ID instead of putting them here (see README "Telegram alerts").
 # telegram_bot_token = ""

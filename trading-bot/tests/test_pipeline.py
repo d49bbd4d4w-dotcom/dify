@@ -61,6 +61,10 @@ class FakeHttp:
             return {"bids": [[str(SPOT - 5), "2", 1]], "asks": [[str(SPOT + 5), "1", 1]]}
         if "alternative.me" in url:
             return {"data": [{"value": "61", "value_classification": "Greed"}]}
+        if url.endswith("/markets") and params and "tickers" in params:
+            wanted = params["tickers"].split(",")
+            return {"markets": [{**m, "status": "finalized", "result": self.results.get(m["ticker"], "")}
+                                for m in self.markets if m["ticker"] in wanted], "cursor": ""}
         if url.endswith("/markets"):
             return {"markets": self.markets, "cursor": ""}
         if "/markets/" in url:

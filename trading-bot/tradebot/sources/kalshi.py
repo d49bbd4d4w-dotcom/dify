@@ -113,3 +113,16 @@ class Kalshi:
 
     def market(self, ticker: str) -> Market:
         return Market.from_api(self.http.get_json(f"{BASE}/markets/{ticker}")["market"])
+
+    def markets(self, tickers: list[str]) -> list[Market]:
+        """Look up many markets by ticker, 50 per request."""
+        out: list[Market] = []
+        for i in range(0, len(tickers), 50):
+            chunk = tickers[i:i + 50]
+            data = self.http.get_json(f"{BASE}/markets", {"tickers": ",".join(chunk), "limit": len(chunk)})
+            out += [Market.from_api(m) for m in data.get("markets", [])]
+        return out
+
+    def series(self, category: str) -> list[dict]:
+        data = self.http.get_json(f"{BASE}/series", {"category": category})
+        return data.get("series") or []

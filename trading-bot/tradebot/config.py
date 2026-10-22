@@ -46,6 +46,28 @@ class Config:
     thesis_model: str = "claude-opus-5-5"
     thesis_effort: str = "low"
 
+    # ----- Sports (Kalshi game-winner markets vs. sharp sportsbooks) -----
+    # Free key from https://the-odds-api.com (prefer the ODDS_API_KEY env var).
+    odds_api_key: str = ""
+    # Kalshi series to scan; empty = find all supported game series automatically.
+    sports_series: list[str] = field(default_factory=list)
+    # Up to 10 books per request cost 1 credit. Pinnacle is used as "the" fair
+    # price when present; otherwise the median of the others.
+    sports_bookmakers: list[str] = field(default_factory=lambda: [
+        "pinnacle", "betonlineag", "lowvig", "draftkings", "fanduel",
+        "betmgm", "williamhill_us", "betrivers", "bovada"])
+    sports_min_edge: float = 0.02  # min expected profit per contract after fees
+    sports_max_spread: float = 0.05  # skip thin Kalshi markets
+    sports_max_disagreement: float = 0.10  # books vs Kalshi gap that means "news or mismatch"
+    sports_max_book_spread: float = 0.06  # skip when the books themselves disagree this much
+    sports_min_books: int = 3  # books needed for a consensus when Pinnacle is missing
+    sports_max_quote_age_min: float = 30.0
+    sports_max_days_ahead: float = 3.0
+    sports_include_live: bool = False  # in-game betting is riskier; off by default
+    sports_poll_minutes: float = 30.0  # slowed down automatically to fit your Odds API plan
+
+    timezone: str = "America/Los_Angeles"  # for times shown in alerts
+
     # Alerts. Prefer the TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID / DISCORD_WEBHOOK_URL
     # environment variables so secrets stay out of files.
     telegram_bot_token: str = ""
@@ -72,7 +94,8 @@ def load_config(path: str | Path | None = None) -> Config:
             setattr(cfg, k, v)
     for env, attr in (("DISCORD_WEBHOOK_URL", "discord_webhook_url"),
                       ("TELEGRAM_BOT_TOKEN", "telegram_bot_token"),
-                      ("TELEGRAM_CHAT_ID", "telegram_chat_id")):
+                      ("TELEGRAM_CHAT_ID", "telegram_chat_id"),
+                      ("ODDS_API_KEY", "odds_api_key")):
         if os.environ.get(env):
             setattr(cfg, attr, os.environ[env])
     return cfg
