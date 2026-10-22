@@ -25,7 +25,7 @@ It also has a simple BTC swing/day-trade view you can use for spot trading on Ro
    - the market has at least 2 minutes left
    - the bid/ask spread isn't too wide
    - the model and the market don't disagree wildly. A huge gap usually means the market knows something the model doesn't, such as news, so the bot passes.
-5. **It suggests a size.** It uses "quarter-Kelly" sizing, capped at `max_stake` (default $10).
+5. **It suggests a size** from your paper bankroll (see [Bankroll](#bankroll)).
 6. **It keeps score.** Every pick and every estimate is saved and scored once the market settles. The `report` command shows your win rate, profit and loss after fees, and whether the model is actually more accurate than the market price.
 
 The optional `--explain` flag uses Claude to write a short plain-English thesis and list risks for each pick. The numbers always come from the model; Claude only explains them.
@@ -37,6 +37,47 @@ The optional `--explain` flag uses Claude to write a short plain-English thesis 
 - **Kalshi's 15-minute BTC markets are very competitive.** Professional market makers price them with similar math. Most of the time the bot will say "no picks", and that's correct.
 - **Paper-track first.** Run `watch` for at least a week, then run `report`. Only consider real money if the model's **Brier score** is below the market's across 300 or more estimates, and the simulated profit after fees is positive. Brier score measures accuracy, and lower is better. If those conditions aren't met, the honest conclusion is that the bot has no edge.
 - **Never stake money you can't afford to lose.** Keep `bankroll` and `max_stake` small.
+
+---
+
+## Bankroll
+
+Set `bankroll` in `config.toml` to the money you're putting aside (default **$100**). Every alert says exactly how much to bet:
+
+```
+Bet: 4 contracts = $2.00 (2% of your $100.00 paper bankroll)
+```
+
+**How stakes are sized:** stakes follow the **Kelly criterion**, the standard formula for growing a bankroll as fast as possible without going broke. The bot uses a quarter of the full Kelly amount, which is safer.
+- Strong edges at good odds get more. Long shots get very little.
+- No single bet is more than **5% of the bankroll** or `max_stake` ($10).
+- At most **60%** of the bankroll is ever in unsettled bets at once. Picks beyond that are tracked but not suggested.
+
+**It compounds:** stakes are based on the *current* paper bankroll, meaning your starting amount plus the results of every bet the bot has suggested. So they grow when it's winning and shrink when it's losing. `report` shows where it stands:
+
+```
+=== Paper bankroll: started $100.00 → now $112.40 (+12.4%) | in open bets: $8.50 ===
+```
+
+---
+
+## "Math is off" checks (arbitrage)
+
+On every scan, the bot also looks for spots where Kalshi's own prices contradict each other, so that buying a set of contracts pays out **no matter what happens**, for less than it costs:
+
+- **Games:** buying YES on every outcome (both teams, plus "Tie" in soccer) costs less than $1.
+- **"Above $X" ladders** (`KXBTCD`): a higher price target is selling for more than a lower one, which can't be right, because BTC can't finish above the higher target without also being above the lower one.
+- **Price ranges** (`KXBTC`): the ranges together cover every possible price, yet cost less than $1.
+
+```
+🧮 MATH IS OFF: locked-in profit (arbitrage)
+Boston at New York
+• Buy YES on Boston @ 45¢
+• Buy YES on New York @ 50¢
+One set costs 98.5¢ incl. fees and pays at least $1.00 whatever happens (+1.5¢ per set)
+```
+
+These are **rare, small, and usually gone within seconds**, so treat them as a bonus. Always check every price before buying, and buy all the legs or none. For American football, it notes that a tie could make the set lose, so check Kalshi's tie rules.
 
 ---
 
@@ -136,7 +177,11 @@ Each pick is sent only once, even though `watch` checks every minute. To turn of
 The bot doesn't try to guess who will win; that rarely works. Instead it uses the prices at **sharp sportsbooks** as the "true" odds:
 
 1. **Kalshi:** it finds every open game-winner market for the sports Kalshi offers. No login is needed.
-2. **Sportsbook prices:** from [The Odds API](https://the-odds-api.com) it fetches the moneyline (who wins) for the same games from up to 9 books. **Pinnacle**, a sportsbook known for very accurate prices, is used when available. Otherwise it takes the middle (median) price of at least 3 books.
+2. **Sportsbook prices:** from [The Odds API](https://the-odds-api.com) it fetches the moneyline (who wins) for the same games from 10 sources in one request:
+   - **Sharp sources:** Pinnacle; the betting exchanges **Betfair, Matchbook and Smarkets**; and BetOnline and LowVig. These are places where winning bettors aren't limited, so their prices are the most accurate.
+   - **The big US books** (DraftKings, FanDuel, BetMGM, Caesars): used only as a fallback. Their prices are less accurate, and adding more books like them would make the "true" price *worse*, not better.
+
+   The fair price is the **average of the sharp sources** (Pinnacle counts double). If none of them price the game, it uses the middle (median) price of at least 3 US books.
 3. **Fair odds:** it removes the bookmaker's built-in margin to get fair win chances. For example, odds that imply 52% / 52% become 50% / 50%.
 4. **Comparing with Kalshi:** if Kalshi sells a side for less than its fair chance, by at least **2¢ per contract after Kalshi's fee**, you get a pick.
 5. **Safety checks:** it skips the game if any of these are true:
@@ -185,9 +230,9 @@ Ticker: KXNBAGAME-26OCT22LALLAC-LAL
 
 By default the bot only sends **big-payout parlays** to Telegram, in three sizes:
 
-- **25x+**, which turns $20 into $500 or more
-- **50x+**, $1,000 or more
-- **100x+**, $2,000 or more
+- **25x+**
+- **50x+**
+- **100x+**
 
 For each size, it checks **every combination** of qualifying legs and sends the one with the **highest chance of hitting** at that payout. A qualifying leg passes every safety check above, Kalshi sells it below the sharp-book price, and there's only one leg per game. That's usually a mix of a few favorites and one or two underdogs, which is safer than stacking all underdogs for the same payout.
 
@@ -199,22 +244,31 @@ For each size, it checks **every combination** of qualifying legs and sends the 
 4. 🏈 Tennessee to win (Tennessee at Ole Miss) @ 32¢ · Thu Oct 22 12:00 PM PDT
 5. 🏀 Orlando to win (Orlando at Boston) @ 27¢ · Thu Oct 22 4:00 PM PDT
 True chance: 3.1% (about 1 in 33)
-$20 pays ~$1,007 (50.4x) if Kalshi prices it like the legs
-Only take it if it pays at least 33.6x ($672)
-Expected profit: +$10.86 per $20, but most likely you lose the $20.
+Bet $1.00 → pays ~$50.36 (50.4x) if Kalshi prices it like the legs
+Only take it if Kalshi pays at least 33.6x
+Expected profit: +$0.54 on $1.00, but most likely you lose the $1.00.
+(For a $100 bankroll the math says $0.28; $1.00 is the practical minimum. Long shots deserve small stakes.)
 ```
 
-The bot sends at most one ticket of each size every 12 hours (`parlay_alert_cooldown_hours`). Only the tickets it sends count in the paper results, so `report` reflects exactly what you'd have bet. Single picks are still tracked and shown in the terminal, just not sent. To get single picks and the smaller parlays (below) on Telegram too, set `sports_style = "all"`.
+The bot sends at most one ticket of each size every 12 hours (`parlay_alert_cooldown_hours`). Only the tickets it sends count in the paper results, so `report` reflects exactly what you'd have bet.
+
+**Styles (`sports_style`):**
+
+| Style | What gets sent to Telegram |
+|---|---|
+| `"bankroll"` (default) | Single picks and big-hitter parlays, all sized from your bankroll. |
+| `"big"` | Big-hitter parlays only. Single picks are tracked but not sent. |
+| `"all"` | Single picks plus the safer / value / long-shot parlays below. |
 
 ### All parlay types (`sports_style = "all"`)
 
 In this mode each sports check can suggest up to three parlays, built from the same qualifying legs:
 
-| Ticket | Built from | Typical chance | Typical payout on $20 |
+| Ticket | Built from | Typical chance | Typical payout (per $1) |
 |---|---|---|---|
-| 🎟️ **Safer** | 2–3 favorites (each 65%+ to win) | 30–50% | $40–$70 |
-| 🎟️ **Value** | up to 4 of the best-priced legs, each 40%+ | 10–25% | $80–$200 |
-| 🎟️ **Long shot** | best-priced legs until it pays 50x+ | about 1 in 50 to 1 in 200 | $1,000+ |
+| 🎟️ **Safer** | 2–3 favorites (each 65%+ to win) | 30–50% | $2–$3.50 |
+| 🎟️ **Value** | up to 4 of the best-priced legs, each 40%+ | 10–25% | $4–$10 |
+| 🎟️ **Long shot** | best-priced legs until it pays 50x+ | about 1 in 50 to 1 in 200 | $50+ |
 
 Example:
 
@@ -224,9 +278,9 @@ Example:
 2. 🏀 Orlando to win (Orlando at Boston) @ 27¢ · Thu Oct 22 4:00 PM PDT
 3. 🏒 San Jose to win (San Jose at Edmonton) @ 24¢ · Thu Oct 22 7:00 PM PDT
 True chance: 1.4% (about 1 in 70)
-$20 pays ~$2,058 (102.9x) if Kalshi prices it like the legs
-Only take it if it pays at least 72.4x ($1,448)
-Expected profit: +$9.28 per $20, but most likely you lose the $20.
+Bet $1.00 → pays ~$102.88 (102.9x) if Kalshi prices it like the legs
+Only take it if Kalshi pays at least 72.4x
+Expected profit: +$0.46 on $1.00, but most likely you lose the $1.00.
 ```
 
 **There's always a tradeoff between chance and payout.** A parlay only pays if every leg wins, so each leg you add shrinks the chance of hitting. A $20 ticket that pays $2,000 has to lose about 99 times out of 100; if it didn't, the market would charge more for it. What the bot adds is that every leg is priced *below* its fair chance. A parlay multiplies that edge, so the *average* result is positive. Most individual tickets will still lose.
@@ -236,7 +290,7 @@ For example, a 1-in-70 long shot played once a day goes a whole month without hi
 **How to use the numbers:**
 - **True chance** comes from the sharp sportsbooks, with the bookmaker margin removed.
 - **Payout** is estimated by multiplying the single-game Kalshi prices. The bot can't see the price Kalshi would charge for a combined bet.
-- **"Only take it if it pays at least"** is the lowest payout that still leaves an edge. If Kalshi's app lets you combine these games into one bet, compare its payout with this number. If it pays less, skip it. If the app doesn't offer that combination, there's no way to place it on Kalshi.
+- **"Only take it if Kalshi pays at least"** is the lowest payout that still leaves an edge. When you build the combo in Kalshi's app, divide its max payout by its cost and compare with this number. If Kalshi pays less, skip it.
 
 Parlays are paper-tracked like everything else. You get a 🎟️ ✅ HIT or ❌ MISSED message (with the leg that lost), and `report` shows each kind's hits next to how many you'd *expect* by chance. A cancelled game drops out of the parlay, the same way sportsbooks handle it.
 
@@ -261,16 +315,19 @@ Start by running it **on your own computer**. Leave `watch` running in a termina
 | `max_disagreement` | `0.25` | Skip a market when the model and the market differ by more than this. |
 | `vol_multiplier` | `1.15` | Raise this to make the model more cautious (BTC has fat tails). |
 | `momentum_weight` | `0.0` | Experimental trend tilt. Leave at 0 unless `report` shows it helps. |
-| `bankroll`, `kelly_multiplier`, `max_stake` | `100`, `0.25`, `10` | Position sizing (used for BTC and sports). |
+| `bankroll` | `100` | Starting paper bankroll. All stakes are sized from it (see [Bankroll](#bankroll)). |
+| `kelly_multiplier` | `0.25` | Fraction of full Kelly to bet (quarter-Kelly). |
+| `max_stake`, `max_bet_fraction` | `10`, `0.05` | Biggest single bet: $10 or 5% of the bankroll, whichever is smaller. |
+| `max_open_fraction` | `0.6` | Most of the bankroll that can be in unsettled bets at once. |
+| `arbs_enabled` | `true` | Look for "math is off" arbitrage on Kalshi. |
 | `odds_api_key` | — | Your The Odds API key (or set `ODDS_API_KEY`). Turns sports on. |
 | `sports_min_edge` | `0.02` | Minimum profit per contract after fees for a sports pick. |
 | `sports_max_disagreement` | `0.10` | Skip when Kalshi and the books differ by more than this (news or mismatch). |
 | `sports_poll_minutes` | `30` | Fastest sports check rate; slowed automatically to fit your credits. |
-| `sports_style` | `"big"` | `"big"`: only big-payout parlays are sent. `"all"`: single picks and every parlay type are sent. |
+| `sports_style` | `"bankroll"` | What gets sent: see the styles table under [Big-hitter parlays](#big-hitter-parlays-the-default). |
 | `big_hitter_payouts` | `[25, 50, 100]` | Payout sizes for big-hitter tickets (multiples of the stake). |
 | `parlay_alert_cooldown_hours` | `12` | At most one ticket of each size per this many hours. |
 | `parlays_enabled` | `true` | Turn parlay suggestions on or off. |
-| `parlay_stake` | `20` | Dollars per parlay, used for the payout and paper P&L. |
 | `parlay_longshot_payout` | `50` | A "long shot" pays at least this many times the stake. |
 | `sports_series` | auto | Limit to certain Kalshi series, e.g. `["KXNFLGAME", "KXNBAGAME"]`. |
 | `timezone` | `America/Los_Angeles` | Timezone for times in alerts. |
@@ -282,7 +339,7 @@ pip install -r requirements-dev.txt
 python -m pytest
 ```
 
-Code layout: `tradebot/model.py` holds the probability, fee and sizing math. `analyzer.py` turns market data into picks. `sources/` holds the data fetchers. `tracker.py` handles the SQLite log and scoring. `sports.py` matches Kalshi games to sportsbook games and prices them. `parlays.py` builds parlays from those legs. `swing.py` is the spot view, and `thesis.py` writes the Claude explanations.
+Code layout: `tradebot/model.py` holds the probability, fee and sizing math. `analyzer.py` turns market data into picks. `sources/` holds the data fetchers. `tracker.py` handles the SQLite log and scoring. `sports.py` matches Kalshi games to sportsbook games and prices them. `parlays.py` builds parlays from those legs, and `arbs.py` runs the "math is off" checks. `swing.py` is the spot view, and `thesis.py` writes the Claude explanations.
 
 ### Ideas for later
 

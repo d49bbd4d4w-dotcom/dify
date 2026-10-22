@@ -143,7 +143,7 @@ def evaluate_market(m: Market, ctx: BtcContext, cfg: Config, now: datetime | Non
 
     opps = model.evaluate_sides(p_yes, m.yes_ask, m.no_ask, fee_rate=cfg.fee_rate,
                                 bankroll=cfg.bankroll, kelly_multiplier=cfg.kelly_multiplier,
-                                max_stake=cfg.max_stake)
+                                max_stake=cfg.max_bet())
     if not opps:
         return skip("no tradable asks", p_yes, note)
     best = opps[0]

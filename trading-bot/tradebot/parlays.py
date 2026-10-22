@@ -144,3 +144,17 @@ def big_hitters(legs: list[Leg], cfg: Config) -> list[Parlay]:
         seen.add(best.key)
         out.append(Parlay(f"big{target:g}", best.legs))
     return out
+
+
+def kelly_stake(p: Parlay, cfg: Config) -> tuple[float, float]:
+    """(suggested stake, what the math alone says) for this parlay, from cfg.bankroll.
+
+    Kelly sizing bets more when the edge is big and the chance is high, and very
+    little on long shots: that is what grows a bankroll fastest without going broke.
+    """
+    b = p.payout - 1.0
+    f = (p.value - 1.0) / b if b > 0 else 0.0
+    raw = max(0.0, cfg.bankroll * cfg.kelly_multiplier * f)
+    if raw <= 0:
+        return 0.0, 0.0
+    return round(min(max(raw, cfg.parlay_min_stake), cfg.max_bet()), 2), raw

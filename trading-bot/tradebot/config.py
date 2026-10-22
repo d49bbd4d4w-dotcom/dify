@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import sys
 import tomllib
 from dataclasses import dataclass, field, fields
 from pathlib import Path
@@ -35,9 +36,15 @@ class Config:
     momentum_weight: float = 0.0
 
     # Position sizing (suggestions only, nothing is ever placed for you).
+    # Paper bankroll: what you start with. Stakes are sized from the *current*
+    # paper bankroll (start + results of every pick the bot suggested), so they
+    # grow when it's winning and shrink when it's losing.
     bankroll: float = 100.0
     kelly_multiplier: float = 0.25  # quarter-Kelly
-    max_stake: float = 10.0
+    max_stake: float = 10.0  # never more than this on one bet...
+    max_bet_fraction: float = 0.05  # ...or more than 5% of the bankroll
+    max_open_fraction: float = 0.60  # keep at least 40% of the bankroll out of open bets
+    parlay_min_stake: float = 1.0  # practical minimum for a parlay ticket
     fee_rate: float = 0.07
 
     db_path: str = "tradebot.db"
@@ -54,8 +61,13 @@ class Config:
     # Up to 10 books per request cost 1 credit. Pinnacle is used as "the" fair
     # price when present; otherwise the median of the others.
     sports_bookmakers: list[str] = field(default_factory=lambda: [
-        "pinnacle", "betonlineag", "lowvig", "draftkings", "fanduel",
-        "betmgm", "williamhill_us", "betrivers", "bovada"])
+        "pinnacle", "betfair_ex_eu", "matchbook", "smarkets", "betonlineag", "lowvig",
+        "draftkings", "fanduel", "betmgm", "williamhill_us"])
+    # Sources trusted for the fair price: Pinnacle and betting exchanges, where
+    # winning bettors aren't limited, so prices are the most accurate. The big
+    # US books are only used as a fallback consensus.
+    sharp_books: list[str] = field(default_factory=lambda: [
+        "pinnacle", "betfair_ex_eu", "matchbook", "smarkets", "betonlineag", "lowvig"])
     sports_min_edge: float = 0.02  # min expected profit per contract after fees
     sports_max_spread: float = 0.05  # skip thin Kalshi markets
     sports_max_disagreement: float = 0.10  # books vs Kalshi gap that means "news or mismatch"
@@ -66,9 +78,10 @@ class Config:
     sports_include_live: bool = False  # in-game betting is riskier; off by default
     sports_poll_minutes: float = 30.0  # slowed down automatically to fit your Odds API plan
 
-    # "big": only send big-payout parlays to Telegram (single picks and smaller
-    # parlays are still tracked quietly). "all": send everything.
-    sports_style: str = "big"
+    # "bankroll": single picks + big-hitter parlays, all sized for your bankroll.
+    # "big": only big-payout parlays are sent (singles still tracked quietly).
+    # "all": single picks + safer / value / long-shot parlays.
+    sports_style: str = "bankroll"
     # Payout sizes for big-hitter parlays, as multiples of the stake:
     # 25x / 50x / 100x = $500+ / $1,000+ / $2,000+ on a $20 ticket.
     big_hitter_payouts: list[float] = field(default_factory=lambda: [25.0, 50.0, 100.0])
@@ -77,7 +90,6 @@ class Config:
 
     # Parlays built from sports legs priced below the sharp books (paper-tracked).
     parlays_enabled: bool = True
-    parlay_stake: float = 20.0  # dollars per parlay, for the payout and P&L numbers
     parlay_min_leg_edge: float = 0.01  # each leg's fair chance must beat its price by this
     parlay_min_value_margin: float = 0.03  # parlay must return >= 3% more than it costs, on average
     parlay_safe_min_leg_prob: float = 0.65  # "safer" parlays only use favorites like this
@@ -85,6 +97,12 @@ class Config:
     parlay_value_min_chance: float = 0.10  # ...and keep at least a 10% chance of hitting
     parlay_longshot_payout: float = 50.0  # "long shot" = pays at least 50x
     parlay_max_legs: int = 8
+
+    # "Math is off" checks on Kalshi: sets of contracts that pay out no matter
+    # what, for less than they cost (arbitrage). Checked on every scan.
+    arbs_enabled: bool = True
+    arb_series: list[str] = field(default_factory=lambda: ["KXBTCD", "KXBTC"])
+    arb_min_profit: float = 0.01  # per $1 set, after fees
 
     timezone: str = "America/Los_Angeles"  # for times shown in alerts
 
@@ -99,6 +117,12 @@ class Config:
     def anthropic_enabled(self) -> bool:
         return bool(os.environ.get("ANTHROPIC_API_KEY"))
 
+    def max_bet(self) -> float:
+        return min(self.max_stake, self.bankroll * self.max_bet_fraction)
+
+
+DEPRECATED_KEYS = {"parlay_stake"}
+
 
 def load_config(path: str | Path | None = None) -> Config:
     cfg = Config()
@@ -107,6 +131,10 @@ def load_config(path: str | Path | None = None) -> Config:
         data = tomllib.loads(p.read_text())
         data = data.get("tradebot", data)
         known = {f.name for f in fields(Config)}
+        for old in DEPRECATED_KEYS & set(data):
+            print(f"[info] config key '{old}' is no longer used; stakes are now sized from "
+                  "your bankroll. You can delete it.", file=sys.stderr)
+            data.pop(old)
         unknown = set(data) - known
         if unknown:
             raise ValueError(f"unknown config keys in {p}: {sorted(unknown)}")

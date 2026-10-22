@@ -12,9 +12,11 @@ max_disagreement = 0.25  # if model and market differ this much, assume we're mi
 vol_multiplier = 1.15    # >1 = assume fatter tails than the recent data shows
 momentum_weight = 0.0    # experimental; leave at 0 until `report` proves it helps
 
-bankroll = 100.0         # dollars you're willing to put at risk on this, total
+bankroll = 100.0         # your starting (paper) bankroll; every stake is sized from it
 kelly_multiplier = 0.25  # quarter-Kelly sizing
-max_stake = 10.0         # never suggest more than this per pick
+max_stake = 10.0         # never suggest more than this per pick...
+max_bet_fraction = 0.05  # ...or more than 5% of the bankroll
+max_open_fraction = 0.6  # at most 60% of the bankroll in unsettled bets
 
 db_path = "tradebot.db"
 
@@ -29,15 +31,15 @@ sports_max_disagreement = 0.10
 sports_poll_minutes = 30     # slowed down automatically to make your credits last the month
 # sports_series = ["KXNFLGAME", "KXNBAGAME"]   # default: every supported sport
 
+# "bankroll": single picks + big-hitter parlays, all sized from your bankroll.
 # "big": only big-payout parlays are sent to Telegram (singles still tracked).
 # "all": single picks plus safer / value / long-shot parlays are sent.
-sports_style = "big"
-big_hitter_payouts = [25, 50, 100]   # $500+ / $1,000+ / $2,000+ on a $20 ticket
+sports_style = "bankroll"
+big_hitter_payouts = [25, 50, 100]   # payout sizes, as multiples of the stake
 parlay_alert_cooldown_hours = 12
 
 # Parlays, built only from legs Kalshi prices below the sharp books (paper-tracked)
 parlays_enabled = true
-parlay_stake = 20.0          # dollars per parlay, for payout and P&L numbers
 parlay_longshot_payout = 50  # a "long shot" ticket pays at least 50x
 
 timezone = "America/Los_Angeles"   # for times shown in alerts

@@ -44,6 +44,7 @@ CREATE TABLE IF NOT EXISTS picks (
     result TEXT,  -- 'win' / 'loss' / 'void' / NULL
     pnl REAL,
     category TEXT NOT NULL DEFAULT 'btc',
+    alerted INTEGER NOT NULL DEFAULT 1,  -- 0 = tracked quietly, not suggested to you
     UNIQUE(ticker, side)
 );
 CREATE TABLE IF NOT EXISTS outcomes (
@@ -61,6 +62,12 @@ CREATE TABLE IF NOT EXISTS parlays (
     payout REAL NOT NULL,  -- per $1 staked
     result TEXT,  -- 'win' / 'loss' / 'void' / NULL
     pnl REAL
+);
+CREATE TABLE IF NOT EXISTS arbs (
+    id INTEGER PRIMARY KEY,
+    ts TEXT NOT NULL,
+    leg_key TEXT NOT NULL,
+    profit REAL NOT NULL
 );
 """
 
@@ -93,6 +100,8 @@ class Tracker:
             cols = {r[1] for r in self.db.execute(f"PRAGMA table_info({table})")}
             if cols and "category" not in cols:
                 self.db.execute(f"ALTER TABLE {table} ADD COLUMN category TEXT NOT NULL DEFAULT 'btc'")
+            if table == "picks" and cols and "alerted" not in cols:
+                self.db.execute("ALTER TABLE picks ADD COLUMN alerted INTEGER NOT NULL DEFAULT 1")
         self.db.commit()
 
     def log_evaluation(self, e: Scored, spot: float | None = None, category: str = "btc") -> None:
@@ -105,15 +114,15 @@ class Tracker:
         self.db.commit()
 
     def log_pick(self, e: Scored, thesis: str | None = None, category: str = "btc",
-                 title: str | None = None) -> bool:
+                 title: str | None = None, alerted: bool = True) -> bool:
         """Record a suggestion. Returns False if this ticker/side was already suggested."""
         assert e.best is not None
         cur = self.db.execute(
             "INSERT OR IGNORE INTO picks(ts, ticker, title, side, price, win_prob, ev, contracts, close_time,"
-            " thesis, category) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+            " thesis, category, alerted) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
             (_now(), e.market.ticker, title or f"{e.market.title} {e.market.subtitle}".strip(), e.best.side,
              e.best.price, e.best.win_prob, e.best.ev_per_contract, max(e.best.contracts, 1),
-             e.market.close_time.isoformat() if e.market.close_time else None, thesis, category))
+             e.market.close_time.isoformat() if e.market.close_time else None, thesis, category, int(alerted)))
         self.db.commit()
         return cur.rowcount > 0
 
@@ -190,6 +199,30 @@ class Tracker:
             settled.append({**dict(row), "legs": legs, "result": result, "pnl": pnl, "lost_on": lost_on})
         self.db.commit()
         return settled
+
+    def has_pick(self, ticker: str, side: str) -> bool:
+        return self.db.execute("SELECT 1 FROM picks WHERE ticker=? AND side=?", (ticker, side)).fetchone() is not None
+
+    def current_bankroll(self, start: float) -> float:
+        """Starting bankroll plus the paper results of everything the bot suggested."""
+        picks = self.db.execute("SELECT COALESCE(SUM(pnl), 0) FROM picks WHERE alerted=1 AND pnl IS NOT NULL")
+        parlays = self.db.execute("SELECT COALESCE(SUM(pnl), 0) FROM parlays WHERE pnl IS NOT NULL")
+        return round(start + picks.fetchone()[0] + parlays.fetchone()[0], 2)
+
+    def open_exposure(self) -> float:
+        """Money currently tied up in suggested bets that haven't settled."""
+        picks = self.db.execute("SELECT COALESCE(SUM(contracts * price), 0) FROM picks"
+                                " WHERE alerted=1 AND result IS NULL").fetchone()[0]
+        parlays = self.db.execute("SELECT COALESCE(SUM(stake), 0) FROM parlays WHERE result IS NULL").fetchone()[0]
+        return round(picks + parlays, 2)
+
+    def arb_seen_recently(self, leg_key: str, minutes: float = 60) -> bool:
+        since = (datetime.now(timezone.utc) - timedelta(minutes=minutes)).isoformat()
+        return self.db.execute("SELECT 1 FROM arbs WHERE leg_key=? AND ts > ?", (leg_key, since)).fetchone() is not None
+
+    def log_arb(self, leg_key: str, profit: float) -> None:
+        self.db.execute("INSERT INTO arbs(ts, leg_key, profit) VALUES (?,?,?)", (_now(), leg_key, profit))
+        self.db.commit()
 
     def last_parlay_time(self, kind: str) -> datetime | None:
         row = self.db.execute("SELECT MAX(ts) FROM parlays WHERE kind=?", (kind,)).fetchone()

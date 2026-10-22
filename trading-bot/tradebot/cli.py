@@ -3,12 +3,13 @@
 from __future__ import annotations
 
 import argparse
+import dataclasses
 import sys
 import time
 from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
-from . import analyzer, notify, parlays, sports, swing, thesis
+from . import analyzer, arbs, model, notify, parlays, sports, swing, thesis
 from .config import Config, load_config
 from .sources import Http, crypto
 from .sources.kalshi import Kalshi
@@ -22,6 +23,29 @@ def local_time(dt: datetime, cfg: Config, with_day: bool = False) -> str:
     t = dt.astimezone(ZoneInfo(cfg.timezone))
     clock = t.strftime("%I:%M %p").lstrip("0")
     return (t.strftime("%a %b %d ") if with_day else "") + f"{clock} {t.strftime('%Z')}"
+
+
+def stake_line(b: model.Opportunity, cfg: Config) -> str:
+    pct = b.stake / cfg.bankroll if cfg.bankroll else 0
+    return f"Bet: {b.contracts} contracts = ${b.stake:.2f} ({pct:.0%} of your ${cfg.bankroll:,.2f} paper bankroll)"
+
+
+def with_bankroll(cfg: Config, tracker: Tracker) -> Config:
+    """Size bets from the current paper bankroll (start + results so far)."""
+    return dataclasses.replace(cfg, bankroll=max(0.0, tracker.current_bankroll(cfg.bankroll)))
+
+
+def room_left(cfg: Config, tracker: Tracker) -> float:
+    """How much more can go into open bets without passing max_open_fraction."""
+    return cfg.bankroll * cfg.max_open_fraction - tracker.open_exposure()
+
+
+def fit_to_room(b: model.Opportunity, room: float) -> bool:
+    """Shrink a bet so open bets stay under the cap. False if not even 1 contract fits."""
+    if b.stake > room:
+        b.contracts = int(max(room, 0.0) // b.price)
+        b.stake = round(b.contracts * b.price, 2)
+    return b.contracts > 0
 
 
 def fmt_pick(e: analyzer.Evaluation) -> str:
@@ -51,7 +75,7 @@ def alert_text(e: analyzer.Evaluation, note: str | None, cfg: Config) -> str:
         f"🟢 PICK: BUY {b.side.upper()} @ ${b.price:.2f}",
         f"{m.title} {m.subtitle}".strip(),
         f"Model {b.win_prob:.0%} chance vs price {b.price * 100:.0f}¢ | edge {b.ev_per_contract * 100:+.1f}¢ after fees",
-        f"Size: {b.contracts} contracts (~${b.stake:.2f})",
+        stake_line(b, cfg),
         f"Closes in {e.minutes_left:.0f} min{closes}",
         f"Ticker: {m.ticker}",
     ])
@@ -85,8 +109,9 @@ def sports_alert_text(e: sports.SportsEvaluation, cfg: Config) -> str:
     lines = [
         f"{sports.icon(e.sport_key)} SPORTS PICK: BUY {b.side.upper()} @ ${b.price:.2f}",
         f"{e.game}: {e.team} {side}",
-        f"Sharp books {b.win_prob:.0%} chance vs price {b.price * 100:.0f}¢ | edge {b.ev_per_contract * 100:+.1f}¢ after fees",
-        f"Size: {b.contracts} contracts (~${b.stake:.2f})",
+        f"Sharp books ({e.fair_source}) {b.win_prob:.0%} chance vs price {b.price * 100:.0f}¢"
+        f" | edge {b.ev_per_contract * 100:+.1f}¢ after fees",
+        stake_line(b, cfg),
     ]
     if e.commence:
         lines.append(f"Starts {local_time(e.commence, cfg, with_day=True)}")
@@ -102,8 +127,7 @@ def money(x: float) -> str:
     return f"{'-' if x < 0 else '+'}${abs(x):,.2f}"
 
 
-def parlay_text(p: parlays.Parlay, cfg: Config) -> str:
-    stake = cfg.parlay_stake
+def parlay_text(p: parlays.Parlay, cfg: Config, stake: float, raw_stake: float | None = None) -> str:
     lines = [f"🎟️ {parlays.title(p.kind)} · {len(p.legs)} legs · paper pick"]
     far = datetime.max.replace(tzinfo=timezone.utc)
     for i, leg in enumerate(sorted(p.legs, key=lambda x: x.commence or far), 1):
@@ -112,13 +136,43 @@ def parlay_text(p: parlays.Parlay, cfg: Config) -> str:
     odds = f"about 1 in {1 / p.chance:,.0f}" if p.chance < 0.2 else f"wins about {p.chance * 10:.0f} times in 10"
     lines += [
         f"True chance: {p.chance:.1%} ({odds})",
-        f"${stake:,.0f} pays ~${stake * p.payout:,.0f} ({p.payout:,.1f}x) if Kalshi prices it like the legs",
-        f"Only take it if it pays at least {p.min_payout(cfg.parlay_min_value_margin):,.1f}x "
-        f"(${stake * p.min_payout(cfg.parlay_min_value_margin):,.0f})",
-        f"Expected profit: {money(stake * (p.value - 1))} per ${stake:,.0f}"
-        + (f", but most likely you lose the ${stake:,.0f}." if p.chance < 0.5 else "."),
+        f"Bet ${stake:,.2f} → pays ~${stake * p.payout:,.2f} ({p.payout:,.1f}x) if Kalshi prices it like the legs",
+        f"Only take it if Kalshi pays at least {p.min_payout(cfg.parlay_min_value_margin):,.1f}x",
+        f"Expected profit: {money(stake * (p.value - 1))} on ${stake:,.2f}"
+        + (f", but most likely you lose the ${stake:,.2f}." if p.chance < 0.5 else "."),
     ]
+    if raw_stake is not None and raw_stake < stake:
+        lines.append(f"(For a ${cfg.bankroll:,.0f} bankroll the math says ${raw_stake:.2f}; "
+                     f"${stake:,.2f} is the practical minimum. Long shots deserve small stakes.)")
     return "\n".join(lines)
+
+
+def arb_text(a: arbs.Arb, cfg: Config, sets: int) -> str:
+    lines = ["🧮 MATH IS OFF: locked-in profit (arbitrage)", a.title]
+    for m, side, price in a.legs:
+        lines.append(f"• Buy {side.upper()} on {m.subtitle or m.ticker} @ {price * 100:.0f}¢  [{m.ticker}]")
+    lines.append(f"One set costs {a.cost * 100:.1f}¢ incl. fees and pays at least ${a.payout:.2f} whatever happens "
+                 f"(+{a.profit * 100:.1f}¢ per set)")
+    if sets:
+        lines.append(f"Up to {sets} sets (~${sets * a.cost:,.2f}) → {money(sets * a.profit)} locked in")
+    if a.note:
+        lines.append(a.note)
+    lines.append("Prices like this usually disappear within seconds. Check every price before buying, "
+                 "and buy all legs or none.")
+    return "\n".join(lines)
+
+
+def report_arbs(found: list[arbs.Arb], cfg: Config, tracker: Tracker,
+                notifier: notify.Notifier | None) -> None:
+    for a in sorted(found, key=lambda a: -a.profit):
+        if tracker.arb_seen_recently(a.key):
+            continue
+        tracker.log_arb(a.key, a.profit)
+        sets = int(max(0.0, min(cfg.max_bet(), room_left(cfg, tracker))) // a.cost) if a.cost > 0 else 0
+        text = arb_text(a, cfg, sets)
+        print("\n" + text)
+        if notifier:
+            notifier.send(text)
 
 
 def parlay_result_text(p: dict) -> str:
@@ -139,6 +193,7 @@ def result_text(p: dict) -> str:
 
 def scan_once(cfg: Config, http: Http, tracker: Tracker, explain: bool, verbose: bool,
               notifier: notify.Notifier | None = None) -> list[analyzer.Evaluation]:
+    cfg = with_bankroll(cfg, tracker)
     kalshi = Kalshi(http)
     ctx = analyzer.build_context(http, cfg)
     now = datetime.now(timezone.utc)
@@ -162,15 +217,31 @@ def scan_once(cfg: Config, http: Http, tracker: Tracker, explain: bool, verbose:
     for e in evals:
         tracker.log_evaluation(e, ctx.spot)
     for e in picks:
+        if tracker.has_pick(e.market.ticker, e.best.side):
+            print(fmt_pick(e) + "\n      (already suggested earlier)")
+            continue
+        if not fit_to_room(e.best, room_left(cfg, tracker)):
+            tracker.log_pick(e, alerted=False)
+            print(fmt_pick(e) + f"\n      (not suggested: {cfg.max_open_fraction:.0%} of the bankroll is "
+                                "already in open bets)")
+            continue
         note = thesis.write_thesis(e, ctx, cfg) if explain else None
         is_new = tracker.log_pick(e, note)
-        print(fmt_pick(e) + ("" if is_new else "\n      (already suggested earlier)"))
+        print(fmt_pick(e))
         if note:
             print("      " + note.replace("\n", "\n      "))
         if is_new and notifier:
             notifier.send(alert_text(e, note, cfg))
     if not picks:
         print("No picks right now — nothing clears the edge threshold after fees.")
+    if cfg.arbs_enabled:
+        found: list[arbs.Arb] = []
+        for series in cfg.arb_series:
+            try:
+                found += arbs.scan_events(kalshi.open_markets(series), cfg)
+            except Exception as e:
+                print(f"[warn] could not check {series} for arbitrage: {e}", file=sys.stderr)
+        report_arbs(found, cfg, tracker, notifier)
     if verbose:
         for e in ranked:
             if not e.is_pick:
@@ -180,26 +251,42 @@ def scan_once(cfg: Config, http: Http, tracker: Tracker, explain: bool, verbose:
 
 def sports_scan(cfg: Config, http: Http, tracker: Tracker, verbose: bool,
                 notifier: notify.Notifier | None = None) -> sports.SportsScan:
+    cfg = with_bankroll(cfg, tracker)
     now = datetime.now(timezone.utc)
     scan = sports.collect(http, cfg, now)
     credits = f" | Odds API credits left: {scan.credits_remaining:,.0f}" if scan.credits_remaining is not None else ""
     print(f"\n[{local_time(now, cfg, with_day=True)}] Sports: {len(scan.evaluations)} Kalshi markets checked{credits}")
     for w in scan.warnings:
         print(f"[warn] {w}")
-    big = cfg.sports_style == "big"
+    send_singles = cfg.sports_style in ("bankroll", "all")
+    big_parlays = cfg.sports_style in ("bankroll", "big")
     picks = [e for e in scan.evaluations if e.is_pick]
+    print(f"Paper bankroll: ${cfg.bankroll:,.2f} | in open bets: ${tracker.open_exposure():,.2f}")
     for e in scan.evaluations:
         tracker.log_evaluation(e, category="sports")
     for e in picks:
-        is_new = tracker.log_pick(e, category="sports", title=f"{e.game}: {e.team}")
-        print(fmt_sports_pick(e, cfg) + ("" if is_new else "\n      (already suggested earlier)"))
-        if is_new and notifier and not big:  # in "big" style singles are tracked, not sent
+        title = f"{e.game}: {e.team}"
+        if tracker.has_pick(e.market.ticker, e.best.side):
+            print(fmt_sports_pick(e, cfg) + "\n      (already suggested earlier)")
+            continue
+        if not send_singles:  # "big" style: singles are tracked quietly, not suggested
+            tracker.log_pick(e, category="sports", title=title, alerted=False)
+            print(fmt_sports_pick(e, cfg) + "\n      (tracked only)")
+            continue
+        if not fit_to_room(e.best, room_left(cfg, tracker)):
+            tracker.log_pick(e, category="sports", title=title, alerted=False)
+            print(fmt_sports_pick(e, cfg) + f"\n      (not suggested: {cfg.max_open_fraction:.0%} of the "
+                                            "bankroll is already in open bets)")
+            continue
+        tracker.log_pick(e, category="sports", title=title)
+        print(fmt_sports_pick(e, cfg))
+        if notifier:
             notifier.send(sports_alert_text(e, cfg))
     if not picks:
         print("No sports picks right now — Kalshi prices are in line with the sharp books.")
     if cfg.parlays_enabled:
         legs_now = parlays.legs_from(scan.evaluations, cfg)
-        tickets = parlays.big_hitters(legs_now, cfg) if big else parlays.build(legs_now, cfg)
+        tickets = parlays.big_hitters(legs_now, cfg) if big_parlays else parlays.build(legs_now, cfg)
         for p in tickets:
             last = tracker.last_parlay_time(p.kind)
             if last and now - last < timedelta(hours=cfg.parlay_alert_cooldown_hours):
@@ -207,16 +294,35 @@ def sports_scan(cfg: Config, http: Http, tracker: Tracker, verbose: bool,
                     print(f"(holding a new {parlays.title(p.kind)} ticket: one was sent in the last "
                           f"{cfg.parlay_alert_cooldown_hours:g}h)")
                 continue
+            stake, raw = parlays.kelly_stake(p, cfg)
+            stake = min(stake, round(room_left(cfg, tracker), 2))
+            if stake < cfg.parlay_min_stake:
+                print(f"(skipping a {parlays.title(p.kind)} ticket: not enough bankroll free for it)")
+                continue
             legs = [{"ticker": leg.ticker, "label": leg_label(leg), "p": leg.p, "price": leg.price}
                     for leg in p.legs]
-            is_new = tracker.log_parlay(p.kind, legs, cfg.parlay_stake, p.chance, p.payout)
-            text = parlay_text(p, cfg)
+            is_new = tracker.log_parlay(p.kind, legs, stake, p.chance, p.payout)
+            text = parlay_text(p, cfg, stake, raw)
             print("\n" + text + ("" if is_new else "\n(already suggested earlier)"))
             if is_new and notifier:
                 notifier.send(text + "\n\nBased on sportsbook prices, not a guarantee.")
         if not tickets:
-            print(f"No {'big-hitter ' if big else ''}parlays right now — not enough legs that Kalshi "
-                  "prices below the sharp books.")
+            print(f"No {'big-hitter ' if big_parlays else ''}parlays right now — not enough legs that "
+                  "Kalshi prices below the sharp books.")
+    if cfg.arbs_enabled:
+        events: dict[str, list[sports.SportsEvaluation]] = {}
+        for e in scan.evaluations:
+            events.setdefault(e.market.event_ticker, []).append(e)
+        found: list[arbs.Arb] = []
+        for evs in events.values():
+            sport = evs[0].sport_key
+            if sport.startswith("soccer") and len(evs) < 3:
+                continue  # without the "Tie" market the set doesn't cover every result
+            tie_risk = len(evs) == 2 and sport.split("_")[0] in ("americanfootball", "mma", "boxing")
+            found += arbs.outcome_arbs([e.market for e in evs], cfg, evs[0].game,
+                                       "Only risk-free if it can't end in a tie or draw; check Kalshi's rules."
+                                       if tie_risk else "")
+        report_arbs(found, cfg, tracker, notifier)
     if verbose:
         for e in scan.evaluations:
             if not e.is_pick:
@@ -356,8 +462,8 @@ def main(argv: list[str] | None = None) -> None:
     if args.cmd == "sports" and args.list_series:
         cmd_sports_series(cfg, http)
         return
-    if cfg.sports_style not in ("big", "all"):
-        raise SystemExit('sports_style in config.toml must be "big" or "all".')
+    if cfg.sports_style not in ("bankroll", "big", "all"):
+        raise SystemExit('sports_style in config.toml must be "bankroll", "big" or "all".')
     if args.cmd == "sports" and not cfg.odds_api_key:
         raise SystemExit("Sports needs a free Odds API key: sign up at https://the-odds-api.com,\n"
                          "then set ODDS_API_KEY (or odds_api_key in config.toml).")
@@ -416,6 +522,10 @@ def main(argv: list[str] | None = None) -> None:
     elif args.cmd == "resolve":
         print(f"Scored {resolve(cfg, http, tracker, notifier)} settled market(s).")
     elif args.cmd == "report":
+        now_bank = tracker.current_bankroll(cfg.bankroll)
+        change = (now_bank - cfg.bankroll) / cfg.bankroll if cfg.bankroll else 0
+        print(f"=== Paper bankroll: started ${cfg.bankroll:,.2f} → now ${now_bank:,.2f} ({change:+.1%})"
+              f" | in open bets: ${tracker.open_exposure():,.2f} ===\n")
         print("\n\n".join(tracker.report(c).render() for c in tracker.categories()))
         summary = tracker.parlay_summary()
         if summary:

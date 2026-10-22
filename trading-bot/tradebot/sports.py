@@ -78,6 +78,10 @@ def icon(sport_key: str) -> str:
 
 # ---------- fair prices from sportsbooks ----------
 
+BOOK_NAMES = {"pinnacle": "Pinnacle", "betfair_ex_eu": "Betfair", "betfair_ex_uk": "Betfair",
+              "matchbook": "Matchbook", "smarkets": "Smarkets", "betonlineag": "BetOnline", "lowvig": "LowVig"}
+
+
 def devig(decimal_odds: dict[str, float]) -> dict[str, float]:
     """Remove the bookmaker margin by normalizing implied probabilities to 100%."""
     inv = {k: 1.0 / v for k, v in decimal_odds.items() if v and v > 1.0}
@@ -116,17 +120,24 @@ def fair_price(event: dict, cfg: Config, now: datetime) -> FairPrice | None:
             per_book[b["key"]] = devig(prices)
     if not per_book:
         return None
-    names = set.intersection(*(set(p) for p in per_book.values()))
-    book_range = max(max(p[n] for p in per_book.values()) - min(p[n] for p in per_book.values())
-                     for n in names)
-    if "pinnacle" in per_book:
-        return FairPrice(per_book["pinnacle"], "Pinnacle, no-vig", len(per_book), book_range)
-    if len(per_book) < cfg.sports_min_books:
+    sharp = {k: v for k, v in per_book.items() if k in cfg.sharp_books}
+    if sharp:
+        # Weighted average of the sharp sources; Pinnacle counts double.
+        weights = {k: 2.0 if k == "pinnacle" else 1.0 for k in sharp}
+        names = set.intersection(*(set(p) for p in sharp.values()))
+        avg = {n: sum(weights[k] * sharp[k][n] for k in sharp) / sum(weights.values()) for n in names}
+        source = " + ".join(BOOK_NAMES.get(k, k) for k in sorted(sharp, key=lambda k: -weights[k]))
+        used = sharp
+    elif len(per_book) >= cfg.sports_min_books:
+        names = set.intersection(*(set(p) for p in per_book.values()))
+        avg = {n: statistics.median(p[n] for p in per_book.values()) for n in names}
+        source = f"consensus of {len(per_book)} books"
+        used = per_book
+    else:
         return None
-    med = {n: statistics.median(p[n] for p in per_book.values()) for n in names}
-    total = sum(med.values())
-    return FairPrice({n: v / total for n, v in med.items()},
-                     f"consensus of {len(per_book)} books, no-vig", len(per_book), book_range)
+    total = sum(avg.values())
+    book_range = max(max(p[n] for p in used.values()) - min(p[n] for p in used.values()) for n in names)
+    return FairPrice({n: v / total for n, v in avg.items()}, f"{source}, no-vig", len(used), book_range)
 
 
 # ---------- matching Kalshi games to sportsbook games ----------
@@ -284,7 +295,7 @@ def evaluate(m: Market, sport_key: str, game: str, team: str, outcome: str | Non
     out.checked = True
     opps = model.evaluate_sides(out.p_yes, m.yes_ask, m.no_ask, fee_rate=cfg.fee_rate,
                                 bankroll=cfg.bankroll, kelly_multiplier=cfg.kelly_multiplier,
-                                max_stake=cfg.max_stake)
+                                max_stake=cfg.max_bet())
     if not opps:
         out.skip_reason = "no tradable Kalshi prices"
         return out

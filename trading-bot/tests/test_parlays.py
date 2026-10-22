@@ -89,13 +89,18 @@ def test_settle_win_loss_void(tmp_path):
 def test_parlay_text_is_honest():
     cfg = Config()
     shot = parlays.Parlay("longshot", [leg(n, 0.30, 0.25) for n in "ABCD"])
-    text = cli.parlay_text(shot, cfg)
+    stake, raw = parlays.kelly_stake(shot, cfg)
+    assert raw < 1.0 and stake == 1.0  # tiny Kelly stake on a long shot, raised to the $1 minimum
+    text = cli.parlay_text(shot, cfg, stake, raw)
     assert "LONG-SHOT PARLAY · 4 legs" in text
     assert f"about 1 in {1 / 0.3 ** 4:,.0f}" in text
-    assert "most likely you lose the $20" in text
-    assert f"pays ~${20 / 0.25 ** 4:,.0f}" in text
+    assert "most likely you lose the $1.00" in text
+    assert f"Bet $1.00 → pays ~${1 / 0.25 ** 4:,.2f}" in text
+    assert "the math says" in text
     safe = parlays.Parlay("safer", [leg("A", 0.8, 0.75), leg("B", 0.8, 0.75)])
-    assert "wins about 6 times in 10" in cli.parlay_text(safe, cfg)
+    s_stake, s_raw = parlays.kelly_stake(safe, cfg)
+    assert s_stake > stake  # likelier tickets get bigger stakes
+    assert "wins about 6 times in 10" in cli.parlay_text(safe, cfg, s_stake, s_raw)
 
 
 def test_sports_scan_suggests_and_settles_parlay(tmp_path, monkeypatch):
@@ -127,7 +132,9 @@ def test_sports_scan_suggests_and_settles_parlay(tmp_path, monkeypatch):
     monkeypatch.setattr(cli.Kalshi, "market", lambda self, t: (_ for _ in ()).throw(RuntimeError("n/a")))
     cli.resolve(c, http, tracker, notify.Notifier(http, c))
     [msg] = [p["text"] for p in http.posts]
-    expected = round(20 / (0.50 * 0.55 * 0.50) - 20, 2)
+    stake = tracker.db.execute("SELECT stake FROM parlays").fetchone()[0]
+    assert 1.0 <= stake <= c.max_bet()
+    expected = round(stake / (0.50 * 0.55 * 0.50) - stake, 2)
     assert msg.startswith(f"🎟️ ✅ PARLAY HIT +${expected:,.2f}")
     assert math.isclose(tracker.db.execute("SELECT pnl FROM parlays").fetchone()[0], expected)
 
