@@ -57,7 +57,7 @@ cp config.example.toml config.toml # Windows: copy config.example.toml config.to
 Optional extras:
 
 - **Claude write-ups:** get an API key at https://console.anthropic.com, then run `export ANTHROPIC_API_KEY=sk-ant-...` (on Windows: `setx ANTHROPIC_API_KEY sk-ant-...`). Each write-up costs about a cent.
-- **Phone alerts:** in Discord, create a webhook (Server Settings → Integrations → Webhooks) and paste its URL into `discord_webhook_url` in `config.toml`.
+- **Phone alerts on Telegram:** see [Telegram alerts](#telegram-alerts) below. Discord also works: create a webhook (Server Settings → Integrations → Webhooks) and set `DISCORD_WEBHOOK_URL` to its URL.
 
 Each time you open a new terminal, run `cd dify/trading-bot` and `source .venv/bin/activate` first.
 
@@ -84,9 +84,45 @@ PICK  KXBTC15M-26OCT221415-15  BTC price up in next 15 mins?
 
 To act on a pick, open that market in the Kalshi app and buy the side shown, at or below the price shown. If the price has moved, the edge may be gone, so skip it.
 
+### Telegram alerts
+
+`watch` can send each new pick to Telegram, then send a ✅ WIN or ❌ LOSS message with the profit or loss once that market settles. A pick alert looks like this:
+
+```
+🟢 PICK: BUY YES @ $0.52
+BTC up in 15 mins?
+Model 62% vs market 51% | edge +8.3¢ after fees
+Size: 8 contracts (~$4.16)
+Closes in 10 min (06:23 UTC)
+Ticker: KXBTC15M-26OCT220415-15
+```
+
+Setup takes about 3 minutes:
+
+1. **Create the bot.** In Telegram, open a chat with **@BotFather**, send `/newbot`, and pick a name. BotFather replies with a token that looks like `123456789:AA...`. Keep it secret, because anyone with the token can post as your bot.
+2. **Give the token to tradebot.**
+   ```bash
+   export TELEGRAM_BOT_TOKEN=123456789:AA...      # Windows: setx TELEGRAM_BOT_TOKEN 123456789:AA...
+   ```
+3. **Choose where alerts go.**
+   - **Just you (simplest):** open your new bot in Telegram and send it any message, such as "hi".
+   - **A channel** (so friends can follow): create the channel, add the bot as an **admin** that is allowed to post, then post anything in the channel.
+4. **Find the chat ID.**
+   ```bash
+   python -m tradebot telegram-setup
+   ```
+   This lists the chats your bot can see. Set the one you want:
+   ```bash
+   export TELEGRAM_CHAT_ID=123456789               # a channel ID looks like -100...
+   python -m tradebot telegram-setup               # sends a test message
+   ```
+5. **Start watching.** Run `python -m tradebot watch`. Alerts only arrive while `watch` is running, so for alerts while you're away, run it on an always-on machine (see below).
+
+Each pick is sent only once, even though `watch` checks every minute. To turn off the win/loss messages, set `notify_results = false` in `config.toml`.
+
 ### Where to run it
 
-Start by running it **on your own computer**. Leave `watch` running in a terminal window while you're at the desk. If you later want it running 24/7, a small cloud server ($5/month on DigitalOcean, Hetzner or similar) or a Raspberry Pi works well: copy the folder over and run `watch` inside `tmux` or `screen`. A 15-minute market needs checks every minute, so scheduled jobs like GitHub Actions aren't a good fit.
+Start by running it **on your own computer**. Leave `watch` running in a terminal window while you're at the desk. If you want Telegram alerts while you're away from your computer, it needs to run 24/7. A small cloud server ($5/month on DigitalOcean, Hetzner or similar) or a Raspberry Pi works well: copy the folder over and run `watch` inside `tmux` or `screen`. A 15-minute market needs checks every minute, so scheduled jobs like GitHub Actions aren't a good fit.
 
 ---
 
@@ -115,3 +151,4 @@ Code layout: `tradebot/model.py` holds the probability, fee and sizing math. `an
 - Add a Kalshi API key to read your own positions and balance (still read-only)
 - Add more signals, such as funding rates, ETF flows or a news feed, and keep each one only if `report` shows it helps
 - Add a small web dashboard of picks and results
+- Two-way Telegram commands (e.g. send `/report` to the bot to get your track record)

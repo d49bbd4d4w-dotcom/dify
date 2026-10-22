@@ -5,7 +5,7 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
-from tradebot import analyzer, cli, swing
+from tradebot import analyzer, cli, notify, swing
 from tradebot.config import Config, load_config
 from tradebot.signals import Candle
 from tradebot.sources.kalshi import Market
@@ -94,9 +94,11 @@ def test_scan_finds_mispriced_market_and_skips_fair_one(tmp_path, capsys):
         kalshi_market("KXBTC15M-C", 0.10, 0.12, floor=SPOT - 300, minutes_left=1),
     ]
     http = FakeHttp(markets)
-    cfg = Config(db_path=str(tmp_path / "t.db"), max_disagreement=0.5)
+    cfg = Config(db_path=str(tmp_path / "t.db"), max_disagreement=0.5,
+                 telegram_bot_token="123:abc", telegram_chat_id="42")
     tracker = Tracker(cfg.db_path)
-    evals = cli.scan_once(cfg, http, tracker, explain=False, verbose=True)
+    notifier = notify.Notifier(http, cfg)
+    evals = cli.scan_once(cfg, http, tracker, explain=False, verbose=True, notifier=notifier)
     by = {e.market.ticker: e for e in evals}
     assert by["KXBTC15M-A"].is_pick and by["KXBTC15M-A"].best.side == "yes"
     assert not by["KXBTC15M-B"].is_pick
@@ -104,15 +106,23 @@ def test_scan_finds_mispriced_market_and_skips_fair_one(tmp_path, capsys):
     out = capsys.readouterr().out
     assert "PICK  KXBTC15M-A" in out and "bitstamp price unavailable" in out
 
-    # Second scan doesn't double-log the same pick.
-    cli.scan_once(cfg, http, tracker, explain=False, verbose=False)
-    assert len(tracker.recent_picks()) == 1
+    # One Telegram alert for the new pick.
+    assert len(http.posts) == 1
+    url, payload = http.posts[0]
+    assert url == "https://api.telegram.org/bot123:abc/sendMessage" and payload["chat_id"] == "42"
+    assert "BUY YES @ $0.52" in payload["text"] and "KXBTC15M-A" in payload["text"]
+
+    # Second scan doesn't double-log or re-alert the same pick.
+    cli.scan_once(cfg, http, tracker, explain=False, verbose=False, notifier=notifier)
+    assert len(tracker.recent_picks()) == 1 and len(http.posts) == 1
 
     # Settle: A resolves YES -> the pick wins, P&L positive.
     http.results = {"KXBTC15M-A": "yes", "KXBTC15M-B": "no", "KXBTC15M-C": "yes"}
     tracker.db.execute("UPDATE picks SET close_time='2000-01-01T00:00:00+00:00'")
     # C was skipped before scoring, so only A and B were logged.
-    assert cli.resolve(cfg, http, tracker) == 2
+    assert cli.resolve(cfg, http, tracker, notifier) == 2
+    # One settlement alert, for the pick only.
+    assert len(http.posts) == 2 and http.posts[1][1]["text"].startswith("✅ WIN +")
     pick = tracker.recent_picks()[0]
     assert pick["result"] == "win" and pick["pnl"] > 0
     rep = tracker.report()
@@ -155,3 +165,35 @@ def test_config_rejects_typos(tmp_path):
     p.write_text("[tradebot]\nmin_egde = 0.05\n")
     with pytest.raises(ValueError):
         load_config(p)
+
+
+def test_telegram_chat_discovery():
+    class H:
+        def get_json(self, url, params=None):
+            assert url.endswith("/botTOKEN/getUpdates")
+            return {"ok": True, "result": [
+                {"message": {"chat": {"id": 42, "first_name": "Angelo", "type": "private"}}},
+                {"channel_post": {"chat": {"id": -100123, "title": "BTC Picks", "type": "channel"}}},
+                {"message": {"chat": {"id": 42, "first_name": "Angelo", "type": "private"}}},
+            ]}
+    chats = notify.telegram_chats(H(), "TOKEN")
+    assert chats == [("42", "Angelo (private)"), ("-100123", "BTC Picks (channel)")]
+
+
+def test_failed_alert_does_not_raise(capsys):
+    class H:
+        def post_json(self, url, payload):
+            raise RuntimeError("telegram is down")
+    cfg = Config(telegram_bot_token="t", telegram_chat_id="1", discord_webhook_url="https://d")
+    notify.Notifier(H(), cfg).send("hi")
+    err = capsys.readouterr().err
+    assert "telegram alert failed" in err and "discord alert failed" in err
+
+
+def test_telegram_settings_from_env(monkeypatch, tmp_path):
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "123:abc")
+    monkeypatch.setenv("TELEGRAM_CHAT_ID", "-100123")
+    cfg = load_config()
+    assert cfg.telegram_bot_token == "123:abc" and cfg.telegram_chat_id == "-100123"
+    assert notify.Notifier(None, cfg).enabled

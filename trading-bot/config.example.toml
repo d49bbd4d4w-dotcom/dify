@@ -22,5 +22,9 @@ db_path = "tradebot.db"
 thesis_model = "claude-opus-5-5"
 thesis_effort = "low"
 
-# Optional: paste a Discord webhook URL to get picks on your phone
-discord_webhook_url = ""
+# Alerts. Easiest is to set the environment variables TELEGRAM_BOT_TOKEN and
+# TELEGRAM_CHAT_ID instead of putting them here (see README "Telegram alerts").
+# telegram_bot_token = ""
+# telegram_chat_id = ""
+# discord_webhook_url = ""
+notify_results = true    # also message you when a pick wins or loses

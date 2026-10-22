@@ -77,18 +77,21 @@ class Tracker:
             " UNION SELECT DISTINCT ticker FROM evaluations WHERE outcome IS NULL", (now,)).fetchall()
         return [r["ticker"] for r in rows]
 
-    def record_outcome(self, ticker: str, result: str, fee_rate: float = 0.07) -> None:
-        """result is Kalshi's 'yes' or 'no'."""
+    def record_outcome(self, ticker: str, result: str, fee_rate: float = 0.07) -> list[dict]:
+        """result is Kalshi's 'yes' or 'no'. Returns the picks that just settled."""
         yes = 1 if result == "yes" else 0
         self.db.execute("UPDATE evaluations SET outcome=? WHERE ticker=? AND outcome IS NULL", (yes, ticker))
+        settled = []
         for p in self.db.execute("SELECT * FROM picks WHERE ticker=? AND result IS NULL", (ticker,)).fetchall():
             won = (p["side"] == result)
             n = p["contracts"]
             cost = n * p["price"] + kalshi_fee(n, p["price"], fee_rate)
-            pnl = (n if won else 0) - cost
-            self.db.execute("UPDATE picks SET result=?, pnl=? WHERE id=?",
-                            ("win" if won else "loss", round(pnl, 2), p["id"]))
+            pnl = round((n if won else 0) - cost, 2)
+            outcome = "win" if won else "loss"
+            self.db.execute("UPDATE picks SET result=?, pnl=? WHERE id=?", (outcome, pnl, p["id"]))
+            settled.append({**dict(p), "result": outcome, "pnl": pnl})
         self.db.commit()
+        return settled
 
     def recent_picks(self, limit: int = 20) -> list[sqlite3.Row]:
         return self.db.execute("SELECT * FROM picks ORDER BY id DESC LIMIT ?", (limit,)).fetchall()

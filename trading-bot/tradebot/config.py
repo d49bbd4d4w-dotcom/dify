@@ -46,7 +46,12 @@ class Config:
     thesis_model: str = "claude-opus-5-5"
     thesis_effort: str = "low"
 
+    # Alerts. Prefer the TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID / DISCORD_WEBHOOK_URL
+    # environment variables so secrets stay out of files.
+    telegram_bot_token: str = ""
+    telegram_chat_id: str = ""
     discord_webhook_url: str = ""
+    notify_results: bool = True  # also alert when a pick settles (win/loss)
 
     @property
     def anthropic_enabled(self) -> bool:
@@ -65,7 +70,9 @@ def load_config(path: str | Path | None = None) -> Config:
             raise ValueError(f"unknown config keys in {p}: {sorted(unknown)}")
         for k, v in data.items():
             setattr(cfg, k, v)
-    env_hook = os.environ.get("DISCORD_WEBHOOK_URL")
-    if env_hook:
-        cfg.discord_webhook_url = env_hook
+    for env, attr in (("DISCORD_WEBHOOK_URL", "discord_webhook_url"),
+                      ("TELEGRAM_BOT_TOKEN", "telegram_bot_token"),
+                      ("TELEGRAM_CHAT_ID", "telegram_chat_id")):
+        if os.environ.get(env):
+            setattr(cfg, attr, os.environ[env])
     return cfg

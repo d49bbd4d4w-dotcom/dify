@@ -34,7 +34,32 @@ def fmt_skip(e: analyzer.Evaluation) -> str:
     return f"pass  {e.market.ticker:<34} {p:<10} {mid:<11} — {e.skip_reason}"
 
 
-def scan_once(cfg: Config, http: Http, tracker: Tracker, explain: bool, verbose: bool) -> list[analyzer.Evaluation]:
+def alert_text(e: analyzer.Evaluation, note: str | None) -> str:
+    """Compact, phone-friendly version of a pick."""
+    m, b = e.market, e.best
+    assert b is not None
+    closes = f" ({m.close_time:%H:%M} UTC)" if m.close_time else ""
+    text = "\n".join([
+        f"🟢 PICK: BUY {b.side.upper()} @ ${b.price:.2f}",
+        f"{m.title} {m.subtitle}".strip(),
+        f"Model {b.win_prob:.0%} vs market {e.market_mid or 0:.0%} | edge {b.ev_per_contract * 100:+.1f}¢ after fees",
+        f"Size: {b.contracts} contracts (~${b.stake:.2f})",
+        f"Closes in {e.minutes_left:.0f} min{closes}",
+        f"Ticker: {m.ticker}",
+    ])
+    if note:
+        text += f"\n\n{note}"
+    return text + "\n\nModel estimate, not financial advice. Skip it if the price has moved."
+
+
+def result_text(p: dict) -> str:
+    icon = "✅ WIN" if p["result"] == "win" else "❌ LOSS"
+    return (f"{icon} {p['pnl']:+.2f} USD\n{p['title']}\n"
+            f"{p['side'].upper()} @ ${p['price']:.2f} x {p['contracts']} | {p['ticker']}")
+
+
+def scan_once(cfg: Config, http: Http, tracker: Tracker, explain: bool, verbose: bool,
+              notifier: notify.Notifier | None = None) -> list[analyzer.Evaluation]:
     kalshi = Kalshi(http)
     ctx = analyzer.build_context(http, cfg)
     now = datetime.now(timezone.utc)
@@ -63,8 +88,8 @@ def scan_once(cfg: Config, http: Http, tracker: Tracker, explain: bool, verbose:
         print(fmt_pick(e) + ("" if is_new else "\n      (already suggested earlier)"))
         if note:
             print("      " + note.replace("\n", "\n      "))
-        if is_new:
-            notify.discord(http, cfg.discord_webhook_url, fmt_pick(e) + (f"\n{note}" if note else ""))
+        if is_new and notifier:
+            notifier.send(alert_text(e, note))
     if not picks:
         print("No picks right now — nothing clears the edge threshold after fees.")
     if verbose:
@@ -74,7 +99,7 @@ def scan_once(cfg: Config, http: Http, tracker: Tracker, explain: bool, verbose:
     return evals
 
 
-def resolve(cfg: Config, http: Http, tracker: Tracker) -> int:
+def resolve(cfg: Config, http: Http, tracker: Tracker, notifier: notify.Notifier | None = None) -> int:
     kalshi = Kalshi(http)
     n = 0
     for ticker in tracker.unresolved_tickers():
@@ -84,8 +109,11 @@ def resolve(cfg: Config, http: Http, tracker: Tracker) -> int:
             print(f"[warn] {ticker}: {e}", file=sys.stderr)
             continue
         if m.result in ("yes", "no"):
-            tracker.record_outcome(ticker, m.result, cfg.fee_rate)
+            settled = tracker.record_outcome(ticker, m.result, cfg.fee_rate)
             n += 1
+            if notifier and cfg.notify_results:
+                for p in settled:
+                    notifier.send(result_text(p))
     return n
 
 
@@ -105,6 +133,28 @@ def cmd_swing(cfg: Config, http: Http, timeframe: str, explain: bool) -> None:
         if note:
             print("\n" + note)
     print(f"\n{DISCLAIMER}")
+
+
+def cmd_telegram_setup(cfg: Config, http: Http) -> None:
+    token = cfg.telegram_bot_token
+    if not token:
+        print("No bot token yet. In Telegram, message @BotFather, send /newbot, follow the prompts,\n"
+              "then set TELEGRAM_BOT_TOKEN (or telegram_bot_token in config.toml) and run this again.")
+        return
+    if cfg.telegram_chat_id:
+        notify.telegram(http, token, cfg.telegram_chat_id, "✅ tradebot is connected. Picks will show up here.")
+        print(f"Sent a test message to chat {cfg.telegram_chat_id}. Check Telegram.")
+        return
+    chats = notify.telegram_chats(http, token)
+    if not chats:
+        print("The bot hasn't seen any chats yet. Open your bot in Telegram and send it any message\n"
+              "(or add it as an admin to your channel and post something), then run this again.")
+        return
+    print("Chats your bot can post to:")
+    for chat_id, name in chats:
+        print(f"  {chat_id}   {name}")
+    print("\nSet TELEGRAM_CHAT_ID (or telegram_chat_id in config.toml) to one of these ids,\n"
+          "then run this again to send a test message.")
 
 
 def main(argv: list[str] | None = None) -> None:
@@ -128,6 +178,8 @@ def main(argv: list[str] | None = None) -> None:
     sw.add_argument("--timeframe", choices=["1h", "6h", "1d"], default="1d")
     sw.add_argument("--explain", action="store_true")
 
+    sub.add_parser("telegram-setup", help="find your Telegram chat id and send a test alert")
+
     args = ap.parse_args(argv)
     cfg = load_config(args.config)
     http = Http()
@@ -135,19 +187,26 @@ def main(argv: list[str] | None = None) -> None:
     if args.cmd == "swing":
         cmd_swing(cfg, http, args.timeframe, args.explain)
         return
+    if args.cmd == "telegram-setup":
+        cmd_telegram_setup(cfg, http)
+        return
+
+    notifier = notify.Notifier(http, cfg)
 
     tracker = Tracker(cfg.db_path)
     if args.cmd == "scan":
-        scan_once(cfg, http, tracker, args.explain, args.verbose)
+        scan_once(cfg, http, tracker, args.explain, args.verbose, notifier)
         print(f"\n{DISCLAIMER}")
     elif args.cmd == "watch":
         print(f"Watching {', '.join(cfg.series)} every {args.interval}s. Ctrl+C to stop.\n{DISCLAIMER}")
+        if not notifier.enabled:
+            print("[info] no Telegram/Discord alerts configured; picks only print here.")
         last_resolve = 0.0
         while True:
             try:
-                scan_once(cfg, http, tracker, args.explain, args.verbose)
+                scan_once(cfg, http, tracker, args.explain, args.verbose, notifier)
                 if time.time() - last_resolve > 300:
-                    resolved = resolve(cfg, http, tracker)
+                    resolved = resolve(cfg, http, tracker, notifier)
                     if resolved:
                         print(f"[info] scored {resolved} settled market(s). Run `report` to see results.")
                     last_resolve = time.time()
@@ -157,7 +216,7 @@ def main(argv: list[str] | None = None) -> None:
                 print(f"[error] {e}", file=sys.stderr)
             time.sleep(args.interval)
     elif args.cmd == "resolve":
-        print(f"Scored {resolve(cfg, http, tracker)} settled market(s).")
+        print(f"Scored {resolve(cfg, http, tracker, notifier)} settled market(s).")
     elif args.cmd == "report":
         print(tracker.report().render())
         recent = tracker.recent_picks(10)
