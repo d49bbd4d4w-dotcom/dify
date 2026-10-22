@@ -71,7 +71,8 @@ CREATE TABLE IF NOT EXISTS arbs (
 );
 """
 
-CATEGORY_NAMES = {"btc": "Kalshi BTC 15-minute", "sports": "Kalshi sports"}
+CATEGORY_NAMES = {"btc": "Kalshi BTC 15-minute", "sports": "Kalshi sports", "weather": "Kalshi weather"}
+MODEL_NAMES = {"sports": "sharp sportsbooks", "weather": "forecast"}
 
 
 class Scored(Protocol):
@@ -269,7 +270,7 @@ class Tracker:
         expected = sum(p["ev"] * p["contracts"] for p in picks)
         model_brier = _brier([(e["p_yes"], e["outcome"]) for e in evals])
         market_brier = _brier([(e["market_mid"], e["outcome"]) for e in evals])
-        return Report(CATEGORY_NAMES.get(category, category), "sharp sportsbooks" if category == "sports" else "model",
+        return Report(CATEGORY_NAMES.get(category, category), MODEL_NAMES.get(category, "model"),
                       len(picks), pending, wins, staked, pnl, expected, len(evals), model_brier, market_brier)
 
 

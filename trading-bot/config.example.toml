@@ -38,6 +38,11 @@ sports_style = "bankroll"
 big_hitter_payouts = [25, 50, 100]   # payout sizes, as multiples of the stake
 parlay_alert_cooldown_hours = 12
 
+# ----- Weather (Kalshi daily high temperature; no key needed) -----
+weather_enabled = true
+weather_min_edge = 0.05      # forecasts are less certain than sharp books: ask for 5 cents
+# weather_series = ["KXHIGHNY", "KXHIGHCHI"]   # default: 7 cities
+
 # Parlays, built only from legs Kalshi prices below the sharp books (paper-tracked)
 parlays_enabled = true
 parlay_longshot_payout = 50  # a "long shot" ticket pays at least 50x

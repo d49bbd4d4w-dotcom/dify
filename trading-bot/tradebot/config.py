@@ -98,6 +98,19 @@ class Config:
     parlay_longshot_payout: float = 50.0  # "long shot" = pays at least 50x
     parlay_max_legs: int = 8
 
+    # ----- Weather (Kalshi daily high temperature vs. NWS + GFS/ECMWF models) -----
+    # No key needed. Series must have a known settlement station (sources/weather.py).
+    weather_enabled: bool = True
+    weather_series: list[str] = field(default_factory=lambda: [
+        "KXHIGHNY", "KXHIGHCHI", "KXHIGHMIA", "KXHIGHAUS", "KXHIGHLAX", "KXHIGHDEN", "KXHIGHPHIL"])
+    weather_min_edge: float = 0.05  # forecasts are less certain than sharp books: ask for 5c
+    weather_max_spread: float = 0.08
+    weather_max_disagreement: float = 0.30
+    weather_max_source_gap: float = 4.0  # skip a day when NWS and the models differ by more (°F)
+    weather_spread_inflation: float = 1.3  # model runs are overconfident; widen their spread
+    weather_max_lead_days: int = 1  # today and tomorrow only
+    weather_poll_minutes: float = 30.0
+
     # "Math is off" checks on Kalshi: sets of contracts that pay out no matter
     # what, for less than they cost (arbitrage). Checked on every scan.
     arbs_enabled: bool = True

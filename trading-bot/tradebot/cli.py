@@ -9,7 +9,7 @@ import time
 from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
-from . import analyzer, arbs, model, notify, parlays, sports, swing, thesis
+from . import analyzer, arbs, model, notify, parlays, sports, swing, thesis, weather
 from .config import Config, load_config
 from .sources import Http, crypto
 from .sources.kalshi import Kalshi
@@ -173,6 +173,85 @@ def report_arbs(found: list[arbs.Arb], cfg: Config, tracker: Tracker,
         print("\n" + text)
         if notifier:
             notifier.send(text)
+
+
+def fmt_weather(e: weather.WeatherEvaluation, cfg: Config) -> str:
+    m, b, fc = e.market, e.best, e.forecast
+    assert b is not None and fc is not None
+    return (f"PICK  {m.ticker}  🌡️ {e.station.name} high on {e.day:%a %b %d}: {m.subtitle}\n"
+            f"      BUY {b.side.upper()} @ ${b.price:.2f}  | forecast {b.win_prob:.0%} vs price {b.price * 100:.0f}¢"
+            f"  | edge {b.ev_per_contract * 100:+.1f}¢/contract after fees\n"
+            f"      {forecast_line(fc)}\n"
+            f"      size: {b.contracts} contracts ≈ ${b.stake:.2f}")
+
+
+def forecast_line(fc: weather.Forecast) -> str:
+    parts = []
+    if fc.nws_high is not None:
+        parts.append(f"NWS {fc.nws_high}°")
+    if fc.model_mean is not None:
+        parts.append(f"models avg {fc.model_mean:.1f}° ({fc.model_runs} runs)")
+    if fc.observed_high is not None:
+        parts.append(f"high so far today {fc.observed_high}°")
+    return "Forecast: " + ", ".join(parts) + f" → expected {fc.center:.1f}° ± {fc.sd:.1f}°"
+
+
+def fmt_weather_skip(e: weather.WeatherEvaluation) -> str:
+    p = f"forecast {e.p_yes:.0%}" if e.p_yes is not None else "forecast n/a"
+    mid = f"Kalshi {e.market_mid:.0%}" if e.market_mid is not None else "Kalshi n/a"
+    label = f"{e.station.name[:22]} {e.day:%b %d}" if e.day else e.station.name[:29]
+    return f"pass  {label:<29} {e.market.subtitle[:14]:<14} {p:<13} {mid:<11} — {e.skip_reason}"
+
+
+def weather_alert_text(e: weather.WeatherEvaluation, cfg: Config) -> str:
+    m, b, fc = e.market, e.best, e.forecast
+    assert b is not None and fc is not None
+    outcome = m.subtitle if b.side == "yes" else f"NOT {m.subtitle}"
+    return "\n".join([
+        f"🌡️ WEATHER PICK: BUY {b.side.upper()} @ ${b.price:.2f}",
+        f"{e.station.name} high on {e.day:%a %b %d}: {outcome}",
+        forecast_line(fc),
+        f"Our chance {b.win_prob:.0%} vs price {b.price * 100:.0f}¢ | edge {b.ev_per_contract * 100:+.1f}¢ after fees",
+        stake_line(b, cfg),
+        f"Settles on the NWS daily climate report for {e.station.station_id}",
+        f"Ticker: {m.ticker}",
+    ]) + "\n\nForecast-based, not a guarantee. Skip it if the price has moved."
+
+
+def weather_scan(cfg: Config, http: Http, tracker: Tracker, verbose: bool,
+                 notifier: notify.Notifier | None = None) -> weather.WeatherScan:
+    cfg = with_bankroll(cfg, tracker)
+    now = datetime.now(timezone.utc)
+    scan = weather.collect(http, cfg, now)
+    print(f"\n[{local_time(now, cfg, with_day=True)}] Weather: {len(scan.evaluations)} Kalshi markets checked")
+    for w in scan.warnings:
+        print(f"[warn] {w}")
+    send = cfg.sports_style in ("bankroll", "all")
+    picks = [e for e in scan.evaluations if e.is_pick]
+    for e in scan.evaluations:
+        tracker.log_evaluation(e, category="weather")
+    for e in picks:
+        title = f"{e.station.name} high {e.day:%b %d}: {e.market.subtitle}"
+        if tracker.has_pick(e.market.ticker, e.best.side):
+            print(fmt_weather(e, cfg) + "\n      (already suggested earlier)")
+            continue
+        if not send or not fit_to_room(e.best, room_left(cfg, tracker)):
+            tracker.log_pick(e, category="weather", title=title, alerted=False)
+            print(fmt_weather(e, cfg) + "\n      (tracked only)")
+            continue
+        tracker.log_pick(e, category="weather", title=title)
+        print(fmt_weather(e, cfg))
+        if notifier:
+            notifier.send(weather_alert_text(e, cfg))
+    if not picks:
+        print("No weather picks right now — Kalshi prices are in line with the forecasts.")
+    if cfg.arbs_enabled:
+        report_arbs(scan.arbs, cfg, tracker, notifier)
+    if verbose:
+        for e in scan.evaluations:
+            if not e.is_pick:
+                print(fmt_weather_skip(e))
+    return scan
 
 
 def parlay_result_text(p: dict) -> str:
@@ -432,9 +511,12 @@ def main(argv: list[str] | None = None) -> None:
 
     w = sub.add_parser("watch", help="scan repeatedly and auto-score past picks")
     w.add_argument("--interval", type=int, default=60, help="seconds between BTC scans (default 60)")
-    w.add_argument("--only", choices=["btc", "sports"], help="watch just one of BTC or sports")
+    w.add_argument("--only", choices=["btc", "sports", "weather"], help="watch just one market type")
     w.add_argument("--explain", action="store_true")
     w.add_argument("-v", "--verbose", action="store_true")
+
+    wx = sub.add_parser("weather", help="compare Kalshi daily-high markets with NWS + weather models once")
+    wx.add_argument("-v", "--verbose", action="store_true", help="also show brackets that were passed on")
 
     sp = sub.add_parser("sports", help="compare Kalshi sports markets with sharp sportsbooks once")
     sp.add_argument("-v", "--verbose", action="store_true", help="also show games that were passed on")
@@ -477,19 +559,25 @@ def main(argv: list[str] | None = None) -> None:
     elif args.cmd == "sports":
         sports_scan(cfg, http, tracker, args.verbose, notifier)
         print(f"\n{DISCLAIMER}")
+    elif args.cmd == "weather":
+        weather_scan(cfg, http, tracker, args.verbose, notifier)
+        print(f"\n{DISCLAIMER}")
     elif args.cmd == "watch":
-        do_btc = args.only != "sports"
-        do_sports = args.only != "btc" and bool(cfg.odds_api_key)
+        do_btc = args.only in (None, "btc")
+        do_sports = args.only in (None, "sports") and bool(cfg.odds_api_key)
+        do_weather = args.only in (None, "weather") and cfg.weather_enabled
         if args.only == "sports" and not cfg.odds_api_key:
             raise SystemExit("Sports needs ODDS_API_KEY; see `python -m tradebot sports`.")
-        watching = (["BTC 15-minute"] if do_btc else []) + (["sports"] if do_sports else [])
+        watching = ((["BTC 15-minute"] if do_btc else []) + (["sports"] if do_sports else [])
+                    + (["weather"] if do_weather else []))
         print(f"Watching {' + '.join(watching)}. Ctrl+C to stop.\n{DISCLAIMER}")
-        if not do_sports and args.only != "btc":
+        if not do_sports and args.only in (None, "sports"):
             print("[info] sports is off: set ODDS_API_KEY to turn it on.")
         if not notifier.enabled:
             print("[info] no Telegram/Discord alerts configured; picks only print here.")
         last_resolve = 0.0
         next_sports = 0.0
+        next_weather = 0.0
         while True:
             try:
                 if do_btc:
@@ -509,6 +597,12 @@ def main(argv: list[str] | None = None) -> None:
                         if wait > cfg.sports_poll_minutes:
                             print(f"[info] next sports check in {wait:.0f} min to make your Odds API credits "
                                   "last the month.")
+                if do_weather and time.time() >= next_weather:
+                    next_weather = time.time() + cfg.weather_poll_minutes * 60
+                    try:
+                        weather_scan(cfg, http, tracker, args.verbose, notifier)
+                    except Exception as e:
+                        print(f"[error] weather check failed: {e}", file=sys.stderr)
                 if time.time() - last_resolve > 300:
                     resolved = resolve(cfg, http, tracker, notifier)
                     if resolved:

@@ -4,6 +4,7 @@ A personal research bot for Kalshi. It has two parts:
 
 - **Bitcoin:** it watches Kalshi's **"Bitcoin up or down in 15 minutes"** markets (`KXBTC15M`), estimates the real odds from live BTC prices, and tells you when Kalshi's price looks wrong by enough to beat the fees.
 - **Sports:** it compares Kalshi's game-winner markets (NFL, NBA, MLB, NHL, college, soccer, UFC, tennis and more) with the prices at sharp sportsbooks, and tells you when Kalshi is selling a team cheaper than the sportsbooks think it's worth. See [Sports picks](#sports-picks).
+- **Weather:** it compares Kalshi's daily high-temperature markets (New York, Chicago, Miami, Austin, Los Angeles, Denver, Philadelphia) with the National Weather Service and the US and European weather models. See [Weather picks](#weather-picks).
 
 It also has a simple BTC swing/day-trade view you can use for spot trading on Robinhood.
 
@@ -67,7 +68,7 @@ On every scan, the bot also looks for spots where Kalshi's own prices contradict
 
 - **Games:** buying YES on every outcome (both teams, plus "Tie" in soccer) costs less than $1.
 - **"Above $X" ladders** (`KXBTCD`): a higher price target is selling for more than a lower one, which can't be right, because BTC can't finish above the higher target without also being above the lower one.
-- **Price ranges** (`KXBTC`): the ranges together cover every possible price, yet cost less than $1.
+- **Price ranges** (`KXBTC`, and the weather brackets): the ranges together cover every possible value, yet cost less than $1.
 
 ```
 🧮 MATH IS OFF: locked-in profit (arbitrage)
@@ -114,8 +115,9 @@ Each time you open a new terminal, run `cd dify/trading-bot` and `source .venv/b
 ```bash
 python -m tradebot scan -v            # check every open market once; -v also shows the ones it passed on
 python -m tradebot scan --explain     # same, with a Claude-written thesis for each pick
-python -m tradebot watch              # BTC every 60s + sports (if set up), log everything, auto-score results
-python -m tradebot watch --only btc   # just Bitcoin (or --only sports)
+python -m tradebot watch              # BTC every 60s, sports + weather every 30 min, auto-score results
+python -m tradebot watch --only btc   # just Bitcoin (or --only sports / --only weather)
+python -m tradebot weather -v         # check the temperature markets once (no key needed)
 python -m tradebot sports -v          # check sports once (needs ODDS_API_KEY, see below)
 python -m tradebot report             # track record + "is the model better than Kalshi?", BTC and sports separately
 python -m tradebot swing              # daily BTC trend view (for Robinhood spot trades)
@@ -306,6 +308,31 @@ Start by running it **on your own computer**. Leave `watch` running in a termina
 
 ---
 
+## Weather picks
+
+Kalshi lists daily markets on the high temperature in several cities, split into 2-degree brackets ("63° to 64°", "65° to 66°" and so on). They settle on the National Weather Service's official daily report for one specific weather station. No account or key is needed for the weather data.
+
+The bot builds a chance for every bracket from three free, reliable sources:
+
+1. **The NWS forecast high** for that station. NWS forecasters already correct for local quirks, such as Central Park running cooler than the city around it.
+2. **About 80 runs of the US (GFS) and European (ECMWF) weather models,** from [Open-Meteo](https://open-meteo.com). How much the runs disagree shows how uncertain the forecast is. If the NWS and the models are more than 4° apart, the bot skips that day.
+3. **What the station has already recorded today.** If it has hit 65°, every bracket below 65° can't win. Late in the day, as it cools off, the high is close to settled.
+
+```
+🌡️ WEATHER PICK: BUY YES @ $0.15
+New York (Central Park) high on Fri Oct 23: 69° to 70°
+Forecast: NWS 70°, models avg 69.0° (40 runs) → expected 69.6° ± 2.3°
+Our chance 34% vs price 15¢ | edge +17.7¢ after fees
+Bet: 33 contracts = $4.95 (5% of your $100.00 paper bankroll)
+Settles on the NWS daily climate report for KNYC
+```
+
+It only looks at **today and tomorrow**. A forecast is less certain than a sharp sportsbook price, so it asks for a bigger edge: **5¢ per contract**. Weather picks are tracked and scored separately, so `report` shows whether the forecasts actually beat Kalshi.
+
+**Check the station.** The bot assumes Kalshi settles each city on these NWS stations: Central Park (KNYC), Chicago Midway (KMDW), Miami (KMIA), Austin-Bergstrom (KAUS), LAX (KLAX), Denver (KDEN), Philadelphia (KPHL). Every alert names its station. Compare it with the rules on the market in the Kalshi app the first time. If a city doesn't match, tell me and it's a one-line fix.
+
+---
+
 ## Settings (`config.toml`)
 
 | Setting | Default | What it does |
@@ -320,6 +347,9 @@ Start by running it **on your own computer**. Leave `watch` running in a termina
 | `max_stake`, `max_bet_fraction` | `10`, `0.05` | Biggest single bet: $10 or 5% of the bankroll, whichever is smaller. |
 | `max_open_fraction` | `0.6` | Most of the bankroll that can be in unsettled bets at once. |
 | `arbs_enabled` | `true` | Look for "math is off" arbitrage on Kalshi. |
+| `weather_enabled` | `true` | Scan Kalshi's daily high-temperature markets. |
+| `weather_min_edge` | `0.05` | Minimum profit per contract after fees for a weather pick. |
+| `weather_series` | 7 cities | Which cities to scan, e.g. `["KXHIGHNY", "KXHIGHCHI"]`. |
 | `odds_api_key` | — | Your The Odds API key (or set `ODDS_API_KEY`). Turns sports on. |
 | `sports_min_edge` | `0.02` | Minimum profit per contract after fees for a sports pick. |
 | `sports_max_disagreement` | `0.10` | Skip when Kalshi and the books differ by more than this (news or mismatch). |
@@ -339,7 +369,7 @@ pip install -r requirements-dev.txt
 python -m pytest
 ```
 
-Code layout: `tradebot/model.py` holds the probability, fee and sizing math. `analyzer.py` turns market data into picks. `sources/` holds the data fetchers. `tracker.py` handles the SQLite log and scoring. `sports.py` matches Kalshi games to sportsbook games and prices them. `parlays.py` builds parlays from those legs, and `arbs.py` runs the "math is off" checks. `swing.py` is the spot view, and `thesis.py` writes the Claude explanations.
+Code layout: `tradebot/model.py` holds the probability, fee and sizing math. `analyzer.py` turns market data into picks. `sources/` holds the data fetchers. `tracker.py` handles the SQLite log and scoring. `sports.py` matches Kalshi games to sportsbook games and prices them. `parlays.py` builds parlays from those legs, and `arbs.py` runs the "math is off" checks. `weather.py` turns the NWS forecast, the weather models and today's readings into bracket probabilities. `swing.py` is the spot view, and `thesis.py` writes the Claude explanations.
 
 ### Ideas for later
 

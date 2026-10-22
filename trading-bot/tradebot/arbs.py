@@ -94,6 +94,35 @@ def _covers_everything(markets: list[Market]) -> bool:
     return all(abs(a[1] - b[0]) < 1e-6 for a, b in zip(spans, spans[1:]))
 
 
+def integer_span(m: Market) -> tuple[float, float]:
+    """Whole-number values a market covers, e.g. a daily high of '61° to 62°' -> (61, 62),
+    '>68°' -> (69, inf), '<61°' -> (-inf, 60)."""
+    st, lo, hi = m.strike_type, m.floor_strike, m.cap_strike
+    if st == "greater" and lo is not None:
+        return math.floor(lo) + 1, math.inf
+    if st == "greater_or_equal" and lo is not None:
+        return math.ceil(lo), math.inf
+    if st == "less" and hi is not None:
+        return -math.inf, math.ceil(hi) - 1
+    if st == "less_or_equal" and hi is not None:
+        return -math.inf, math.floor(hi)
+    if st == "between" and lo is not None and hi is not None:
+        return math.ceil(lo), math.floor(hi)
+    raise ValueError(f"unsupported strike type {st!r}")
+
+
+def covers_integers(markets: list[Market]) -> bool:
+    """True if the markets split every whole number between them with no gaps or
+    overlaps (e.g. temperature brackets), so exactly one resolves YES."""
+    try:
+        spans = sorted(integer_span(m) for m in markets)
+    except ValueError:
+        return False
+    if len(spans) < 2 or spans[0][0] != -math.inf or spans[-1][1] != math.inf:
+        return False
+    return all(b[0] == a[1] + 1 for a, b in zip(spans, spans[1:]))
+
+
 def bracket_arbs(markets: list[Market], cfg: Config, title: str) -> list[Arb]:
     """Price-range markets that together cover every possible price."""
     if len(markets) < 2 or not _covers_everything(markets):
