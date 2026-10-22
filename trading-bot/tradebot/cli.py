@@ -10,7 +10,7 @@ from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
 from . import analyzer, arbs, model, notify, parlays, sports, swing, thesis, weather
-from .config import Config, load_config
+from .config import Config, load_config, save_settings
 from .sources import Http, crypto
 from .sources.kalshi import Kalshi
 from .sources.odds_api import OddsApi
@@ -483,6 +483,93 @@ def cmd_telegram_setup(cfg: Config, http: Http) -> None:
           "then run this again to send a test message.")
 
 
+def cmd_setup(cfg: Config, http: Http, path: str, ask=input) -> None:
+    """Guided setup: bankroll, Telegram (checked and tested), Odds API key. Saves config.toml."""
+    print("tradebot setup. Press Enter to keep the value shown in [brackets].\n")
+    values: dict = {}
+
+    while True:
+        raw = ask(f"1) Starting bankroll in dollars [{cfg.bankroll:g}]: ").strip().lstrip("$")
+        try:
+            values["bankroll"] = float(raw) if raw else cfg.bankroll
+            break
+        except ValueError:
+            print("   Please type a number, like 100.")
+
+    print("\n2) Telegram alerts. In Telegram, @BotFather gives you a token like 123456789:AAH...")
+    token = cfg.telegram_bot_token
+    while True:
+        shown = "saved, Enter keeps it" if token else "Enter to skip Telegram"
+        raw = ask(f"   Paste your bot token [{shown}]: ").strip()
+        if not raw and not token:
+            print("   Skipping Telegram. Picks will only show in Terminal.")
+            break
+        token = raw or token
+        try:
+            name = notify.telegram_bot_name(http, token)
+        except Exception:
+            print("   That token didn't work. Copy it again from @BotFather (the whole thing, no spaces).")
+            token = ""
+            continue
+        print(f"   ✅ Found your bot: @{name}")
+        values["telegram_bot_token"] = token
+        break
+
+    chat_id = ""
+    if values.get("telegram_bot_token"):
+        chat_id = cfg.telegram_chat_id if cfg.telegram_bot_token == token else ""
+        if not chat_id:
+            ask("\n   Now post any message in your channel (the bot must be an admin there that can\n"
+                "   post messages). For alerts just to you, send the bot a message instead.\n"
+                "   Press Enter when you've done that... ")
+        while not chat_id:
+            try:
+                chats = notify.telegram_chats(http, token)
+            except Exception as e:
+                print(f"   Couldn't reach Telegram: {e}")
+                chats = []
+            if not chats:
+                raw = ask("   I don't see any messages yet. Post one, then press Enter to check again.\n"
+                          "   (Or type your channel's @username if it's public, or 'skip'): ").strip()
+                if raw.startswith("@"):
+                    chat_id = raw
+                elif raw.lower() == "skip":
+                    break
+                continue
+            for i, (_, label) in enumerate(chats, 1):
+                print(f"   {i}. {label}")
+            raw = ask("   Which one should get the alerts? [1]: ").strip() or "1"
+            if raw.isdigit() and 1 <= int(raw) <= len(chats):
+                chat_id = chats[int(raw) - 1][0]
+    if values.get("telegram_bot_token") and chat_id:
+        try:
+            notify.telegram(http, token, chat_id, "✅ tradebot is connected. Picks will show up here.")
+            print("   ✅ Sent a test message. Check your channel!")
+            values["telegram_chat_id"] = chat_id
+        except Exception:
+            print("   ❌ The test message didn't go through. In the channel, make sure the bot is an\n"
+                  "   admin with permission to post messages, then run setup again.")
+
+    print("\n3) Sports picks need a free key from https://the-odds-api.com (they email it to you).")
+    while True:
+        shown = "saved, Enter keeps it" if cfg.odds_api_key else "Enter to skip sports"
+        raw = ask(f"   Paste your Odds API key [{shown}]: ").strip()
+        if not raw:
+            break
+        try:
+            n = len(OddsApi(http, raw).active_sports())
+            print(f"   ✅ Key works ({n} sports in season).")
+            values["odds_api_key"] = raw
+            break
+        except Exception:
+            print("   That key didn't work. Check it against the email from The Odds API.")
+
+    p = save_settings(path, values)
+    where = "there and in Telegram" if values.get("telegram_chat_id") or cfg.telegram_chat_id else "there"
+    print(f"\nSaved to {p}. You're set! Start the bot with:\n\n    python -m tradebot watch\n\n"
+          f"Leave that window open; picks will show up {where}.")
+
+
 def cmd_sports_series(cfg: Config, http: Http) -> None:
     kalshi = Kalshi(http)
     active = OddsApi(http, cfg.odds_api_key).active_sports() if cfg.odds_api_key else None
@@ -529,6 +616,7 @@ def main(argv: list[str] | None = None) -> None:
     sw.add_argument("--timeframe", choices=["1h", "6h", "1d"], default="1d")
     sw.add_argument("--explain", action="store_true")
 
+    sub.add_parser("setup", help="guided setup: bankroll, Telegram and Odds API key (start here)")
     sub.add_parser("telegram-setup", help="find your Telegram chat id and send a test alert")
 
     args = ap.parse_args(argv)
@@ -537,6 +625,9 @@ def main(argv: list[str] | None = None) -> None:
 
     if args.cmd == "swing":
         cmd_swing(cfg, http, args.timeframe, args.explain)
+        return
+    if args.cmd == "setup":
+        cmd_setup(cfg, http, args.config or "config.toml")
         return
     if args.cmd == "telegram-setup":
         cmd_telegram_setup(cfg, http)

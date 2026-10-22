@@ -22,6 +22,11 @@ def telegram(http: Http, token: str, chat_id: str, text: str) -> None:
                    {"chat_id": chat_id, "text": text[:4090], "disable_web_page_preview": True})
 
 
+def telegram_bot_name(http: Http, token: str) -> str:
+    """The bot's @username. Raises if the token is wrong."""
+    return http.get_json(f"{TELEGRAM_API}/bot{token}/getMe")["result"]["username"]
+
+
 def telegram_chats(http: Http, token: str) -> list[tuple[str, str]]:
     """(chat_id, name) for every chat that has recently messaged the bot or added it."""
     data = http.get_json(f"{TELEGRAM_API}/bot{token}/getUpdates")

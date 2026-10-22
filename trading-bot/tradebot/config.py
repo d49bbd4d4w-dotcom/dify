@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import json
 import os
+import re
 import sys
 import tomllib
 from dataclasses import dataclass, field, fields
@@ -135,6 +137,34 @@ class Config:
 
 
 DEPRECATED_KEYS = {"parlay_stake"}
+EXAMPLE = Path(__file__).resolve().parent.parent / "config.example.toml"
+
+
+def _toml_value(v) -> str:
+    if isinstance(v, bool):
+        return "true" if v else "false"
+    if isinstance(v, (int, float)):
+        return repr(v)
+    return json.dumps(str(v))  # a JSON string is a valid TOML basic string
+
+
+def save_settings(path: str | Path, values: dict) -> Path:
+    """Write settings into config.toml, keeping its comments. Starts from
+    config.example.toml if there is no config.toml yet."""
+    p = Path(path)
+    text = p.read_text() if p.exists() else (EXAMPLE.read_text() if EXAMPLE.exists() else "[tradebot]\n")
+    for key, value in values.items():
+        line = f"{key} = {_toml_value(value)}"
+        pattern = re.compile(rf"^#?[ \t]*{re.escape(key)}[ \t]*=.*$", re.M)
+        if pattern.search(text):
+            text = pattern.sub(lambda _: line, text, count=1)
+        elif "[tradebot]" in text:
+            text = text.replace("[tradebot]", f"[tradebot]\n{line}", 1)
+        else:
+            text = f"[tradebot]\n{line}\n" + text
+    tomllib.loads(text)  # never write a file that won't load
+    p.write_text(text)
+    return p
 
 
 def load_config(path: str | Path | None = None) -> Config:

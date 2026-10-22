@@ -1,2 +1,2 @@
 requests>=2.31
-anthropic>=2.1
+# Optional, only for --explain write-ups: pip install anthropic

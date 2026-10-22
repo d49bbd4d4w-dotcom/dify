@@ -84,29 +84,27 @@ These are **rare, small, and usually gone within seconds**, so treat them as a b
 
 ## Setup (about 10 minutes, one time)
 
-You need Python 3.11 or newer. On a Mac, install it from python.org, or run `brew install python` if you use Homebrew. On Windows, install it from python.org and tick "Add to PATH" during installation.
+1. **Install Python 3.11 or newer** from [python.org/downloads](https://www.python.org/downloads/). On Windows, tick "Add to PATH" during installation.
+2. **Get the code.** On GitHub, open the repo, switch the branch to `claude/trading-bot-data-aggregation-qwpxcz`, then click **Code → Download ZIP**. Unzip it and move the `trading-bot` folder somewhere easy, such as your Desktop. If you use git, you can `git clone` the branch instead.
+3. **Install it.** Open Terminal (Mac) or PowerShell (Windows). Type `cd ` with a space after it, drag the `trading-bot` folder into the window, and press Enter. Then run:
+   ```bash
+   python3 -m venv .venv
+   source .venv/bin/activate          # Windows: .venv\Scripts\activate
+   pip install -r requirements.txt
+   ```
+4. **Run the guided setup:**
+   ```bash
+   python -m tradebot setup
+   ```
+   It asks for your bankroll, your Telegram bot token and your Odds API key (press Enter to skip any of them). It checks that each one works, finds your Telegram channel, sends a test message, and saves everything to `config.toml`. You don't need to edit any files by hand. If you ever do, use a code editor, not TextEdit: TextEdit's curly quotes break the file.
+5. **Start it:** `python -m tradebot watch`
 
-Then open a terminal (Terminal on Mac, PowerShell on Windows) and run:
-
-```bash
-git clone https://github.com/d49bbd4d4w-dotcom/dify.git
-cd dify
-git checkout claude/trading-bot-data-aggregation-qwpxcz
-cd trading-bot
-
-python3 -m venv .venv
-source .venv/bin/activate          # Windows: .venv\Scripts\activate
-pip install -r requirements.txt
-
-cp config.example.toml config.toml # Windows: copy config.example.toml config.toml
-```
+Each time you open a new Terminal window, `cd` into the folder and run `source .venv/bin/activate` again before using the bot.
 
 Optional extras:
 
-- **Claude write-ups:** get an API key at https://console.anthropic.com, then run `export ANTHROPIC_API_KEY=sk-ant-...` (on Windows: `setx ANTHROPIC_API_KEY sk-ant-...`). Each write-up costs about a cent.
-- **Phone alerts on Telegram:** see [Telegram alerts](#telegram-alerts) below. Discord also works: create a webhook (Server Settings → Integrations → Webhooks) and set `DISCORD_WEBHOOK_URL` to its URL.
-
-Each time you open a new terminal, run `cd dify/trading-bot` and `source .venv/bin/activate` first.
+- **Claude write-ups** (`--explain`): run `pip install anthropic`, get an API key at https://console.anthropic.com, then run `export ANTHROPIC_API_KEY=sk-ant-...`. Each write-up costs about a cent.
+- **Discord** instead of, or as well as, Telegram: create a webhook (Server Settings → Integrations → Webhooks) and set `DISCORD_WEBHOOK_URL` to its URL.
 
 ---
 
@@ -150,23 +148,13 @@ Ticker: KXBTC15M-26OCT220415-15
 Setup takes about 3 minutes:
 
 1. **Create the bot.** In Telegram, open a chat with **@BotFather**, send `/newbot`, and pick a name. BotFather replies with a token that looks like `123456789:AA...`. Keep it secret, because anyone with the token can post as your bot.
-2. **Give the token to tradebot.**
-   ```bash
-   export TELEGRAM_BOT_TOKEN=123456789:AA...      # Windows: setx TELEGRAM_BOT_TOKEN 123456789:AA...
-   ```
-3. **Choose where alerts go.**
-   - **Just you (simplest):** open your new bot in Telegram and send it any message, such as "hi".
-   - **A channel** (so friends can follow): create the channel, add the bot as an **admin** that is allowed to post, then post anything in the channel.
-4. **Find the chat ID.**
-   ```bash
-   python -m tradebot telegram-setup
-   ```
-   This lists the chats your bot can see. Set the one you want:
-   ```bash
-   export TELEGRAM_CHAT_ID=123456789               # a channel ID looks like -100...
-   python -m tradebot telegram-setup               # sends a test message
-   ```
-5. **Start watching.** Run `python -m tradebot watch`. Alerts only arrive while `watch` is running, so for alerts while you're away, run it on an always-on machine (see below).
+2. **Choose where alerts go.**
+   - **A channel** (so friends can follow): add the bot to the channel as an **admin** with permission to post messages.
+   - **Just you:** nothing to do here; you'll message the bot in step 3.
+3. **Run `python -m tradebot setup`** and paste the token when it asks. When it says so, post any message in your channel (or send your bot a message). The setup finds the chat, sends a ✅ test message, and saves it.
+4. **Start watching.** Run `python -m tradebot watch`. Alerts only arrive while `watch` is running, so for alerts while you're away, run it on an always-on machine (see below).
+
+`python -m tradebot telegram-setup` re-sends the test message any time you want to check the connection.
 
 Each pick is sent only once, even though `watch` checks every minute. To turn off the win/loss messages, set `notify_results = false` in `config.toml`.
 
@@ -202,11 +190,7 @@ Sportsbooks aren't legal in California, but you don't bet with them. The bot onl
 ### Setup (5 minutes)
 
 1. Sign up for a free key at **https://the-odds-api.com**. They email it to you.
-2. Add it to `config.toml`:
-   ```
-   odds_api_key = "your-key-here"
-   ```
-   Or set it in the terminal with `export ODDS_API_KEY=your-key-here`.
+2. Run `python -m tradebot setup` and paste the key when it asks. It checks that the key works.
 3. Check what it covers:
    ```bash
    python -m tradebot sports --list-series

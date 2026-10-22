@@ -7,8 +7,6 @@ different probability.
 
 from __future__ import annotations
 
-import anthropic
-
 from .analyzer import BtcContext, Evaluation
 from .config import Config
 
@@ -67,6 +65,10 @@ def write_swing_thesis(summary: str, cfg: Config) -> str | None:
 
 
 def _ask(system: str, prompt: str, cfg: Config) -> str | None:
+    try:
+        import anthropic  # optional: only needed for --explain
+    except ImportError:
+        return "(thesis unavailable: run `pip install anthropic` to turn on write-ups)"
     client = anthropic.Anthropic()
     try:
         resp = client.beta.messages.create(
