@@ -66,6 +66,15 @@ class Config:
     sports_include_live: bool = False  # in-game betting is riskier; off by default
     sports_poll_minutes: float = 30.0  # slowed down automatically to fit your Odds API plan
 
+    # "big": only send big-payout parlays to Telegram (single picks and smaller
+    # parlays are still tracked quietly). "all": send everything.
+    sports_style: str = "big"
+    # Payout sizes for big-hitter parlays, as multiples of the stake:
+    # 25x / 50x / 100x = $500+ / $1,000+ / $2,000+ on a $20 ticket.
+    big_hitter_payouts: list[float] = field(default_factory=lambda: [25.0, 50.0, 100.0])
+    parlay_candidate_legs: int = 14  # best-priced legs considered when searching combinations
+    parlay_alert_cooldown_hours: float = 12.0  # at most one ticket of each size per 12h
+
     # Parlays built from sports legs priced below the sharp books (paper-tracked).
     parlays_enabled: bool = True
     parlay_stake: float = 20.0  # dollars per parlay, for the payout and P&L numbers

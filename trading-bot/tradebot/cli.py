@@ -5,7 +5,7 @@ from __future__ import annotations
 import argparse
 import sys
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
 from . import analyzer, notify, parlays, sports, swing, thesis
@@ -104,7 +104,7 @@ def money(x: float) -> str:
 
 def parlay_text(p: parlays.Parlay, cfg: Config) -> str:
     stake = cfg.parlay_stake
-    lines = [f"🎟️ {parlays.TITLES[p.kind]} · {len(p.legs)} legs · paper pick"]
+    lines = [f"🎟️ {parlays.title(p.kind)} · {len(p.legs)} legs · paper pick"]
     far = datetime.max.replace(tzinfo=timezone.utc)
     for i, leg in enumerate(sorted(p.legs, key=lambda x: x.commence or far), 1):
         when = f" · {local_time(leg.commence, cfg, with_day=True)}" if leg.commence else ""
@@ -124,10 +124,10 @@ def parlay_text(p: parlays.Parlay, cfg: Config) -> str:
 def parlay_result_text(p: dict) -> str:
     n = len(p["legs"])
     if p["result"] == "win":
-        return f"🎟️ ✅ PARLAY HIT {money(p['pnl'])} ({p['kind']}, {n} legs)"
+        return f"🎟️ ✅ PARLAY HIT {money(p['pnl'])} ({parlays.title(p['kind'])}, {n} legs)"
     if p["result"] == "void":
-        return f"🎟️ ↩️ PARLAY VOID: every game was cancelled ({p['kind']}, {n} legs)"
-    return (f"🎟️ ❌ PARLAY MISSED {money(p['pnl'])} ({p['kind']}, {n} legs)\n"
+        return f"🎟️ ↩️ PARLAY VOID: every game was cancelled ({parlays.title(p['kind'])}, {n} legs)"
+    return (f"🎟️ ❌ PARLAY MISSED {money(p['pnl'])} ({parlays.title(p['kind'])}, {n} legs)\n"
             f"Lost on: {', '.join(p['lost_on'])}")
 
 
@@ -186,19 +186,27 @@ def sports_scan(cfg: Config, http: Http, tracker: Tracker, verbose: bool,
     print(f"\n[{local_time(now, cfg, with_day=True)}] Sports: {len(scan.evaluations)} Kalshi markets checked{credits}")
     for w in scan.warnings:
         print(f"[warn] {w}")
+    big = cfg.sports_style == "big"
     picks = [e for e in scan.evaluations if e.is_pick]
     for e in scan.evaluations:
         tracker.log_evaluation(e, category="sports")
     for e in picks:
         is_new = tracker.log_pick(e, category="sports", title=f"{e.game}: {e.team}")
         print(fmt_sports_pick(e, cfg) + ("" if is_new else "\n      (already suggested earlier)"))
-        if is_new and notifier:
+        if is_new and notifier and not big:  # in "big" style singles are tracked, not sent
             notifier.send(sports_alert_text(e, cfg))
     if not picks:
         print("No sports picks right now — Kalshi prices are in line with the sharp books.")
     if cfg.parlays_enabled:
-        tickets = parlays.build(parlays.legs_from(scan.evaluations, cfg), cfg)
+        legs_now = parlays.legs_from(scan.evaluations, cfg)
+        tickets = parlays.big_hitters(legs_now, cfg) if big else parlays.build(legs_now, cfg)
         for p in tickets:
+            last = tracker.last_parlay_time(p.kind)
+            if last and now - last < timedelta(hours=cfg.parlay_alert_cooldown_hours):
+                if verbose:
+                    print(f"(holding a new {parlays.title(p.kind)} ticket: one was sent in the last "
+                          f"{cfg.parlay_alert_cooldown_hours:g}h)")
+                continue
             legs = [{"ticker": leg.ticker, "label": leg_label(leg), "p": leg.p, "price": leg.price}
                     for leg in p.legs]
             is_new = tracker.log_parlay(p.kind, legs, cfg.parlay_stake, p.chance, p.payout)
@@ -207,7 +215,8 @@ def sports_scan(cfg: Config, http: Http, tracker: Tracker, verbose: bool,
             if is_new and notifier:
                 notifier.send(text + "\n\nBased on sportsbook prices, not a guarantee.")
         if not tickets:
-            print("No parlays right now — not enough legs that Kalshi prices below the sharp books.")
+            print(f"No {'big-hitter ' if big else ''}parlays right now — not enough legs that Kalshi "
+                  "prices below the sharp books.")
     if verbose:
         for e in scan.evaluations:
             if not e.is_pick:
@@ -347,6 +356,8 @@ def main(argv: list[str] | None = None) -> None:
     if args.cmd == "sports" and args.list_series:
         cmd_sports_series(cfg, http)
         return
+    if cfg.sports_style not in ("big", "all"):
+        raise SystemExit('sports_style in config.toml must be "big" or "all".')
     if args.cmd == "sports" and not cfg.odds_api_key:
         raise SystemExit("Sports needs a free Odds API key: sign up at https://the-odds-api.com,\n"
                          "then set ODDS_API_KEY (or odds_api_key in config.toml).")

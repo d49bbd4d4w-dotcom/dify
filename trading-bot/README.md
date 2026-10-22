@@ -181,9 +181,34 @@ Starts Thu Oct 22 12:21 PM PDT
 Ticker: KXNBAGAME-26OCT22LALLAC-LAL
 ```
 
-### Parlays
+### Big-hitter parlays (the default)
 
-Each sports check can also suggest up to three parlays. They're built only from legs that pass every safety check above and that Kalshi sells below the sharp-book price, with one leg per game:
+By default the bot only sends **big-payout parlays** to Telegram, in three sizes:
+
+- **25x+**, which turns $20 into $500 or more
+- **50x+**, $1,000 or more
+- **100x+**, $2,000 or more
+
+For each size, it checks **every combination** of qualifying legs and sends the one with the **highest chance of hitting** at that payout. A qualifying leg passes every safety check above, Kalshi sells it below the sharp-book price, and there's only one leg per game. That's usually a mix of a few favorites and one or two underdogs, which is safer than stacking all underdogs for the same payout.
+
+```
+🎟️ BIG HITTER · 50x+ · 5 legs · paper pick
+1. ⚽ Arsenal to win (Arsenal vs Fulham) @ 63¢ · Thu Oct 22 1:00 AM PDT
+2. 🏈 Miami to win (Miami at Florida St.) @ 48¢ · Thu Oct 22 9:00 AM PDT
+3. 🏈 Kansas City to win (Las Vegas at Kansas City) @ 76¢ · Thu Oct 22 10:00 AM PDT
+4. 🏈 Tennessee to win (Tennessee at Ole Miss) @ 32¢ · Thu Oct 22 12:00 PM PDT
+5. 🏀 Orlando to win (Orlando at Boston) @ 27¢ · Thu Oct 22 4:00 PM PDT
+True chance: 3.1% (about 1 in 33)
+$20 pays ~$1,007 (50.4x) if Kalshi prices it like the legs
+Only take it if it pays at least 33.6x ($672)
+Expected profit: +$10.86 per $20, but most likely you lose the $20.
+```
+
+The bot sends at most one ticket of each size every 12 hours (`parlay_alert_cooldown_hours`). Only the tickets it sends count in the paper results, so `report` reflects exactly what you'd have bet. Single picks are still tracked and shown in the terminal, just not sent. To get single picks and the smaller parlays (below) on Telegram too, set `sports_style = "all"`.
+
+### All parlay types (`sports_style = "all"`)
+
+In this mode each sports check can suggest up to three parlays, built from the same qualifying legs:
 
 | Ticket | Built from | Typical chance | Typical payout on $20 |
 |---|---|---|---|
@@ -241,6 +266,9 @@ Start by running it **on your own computer**. Leave `watch` running in a termina
 | `sports_min_edge` | `0.02` | Minimum profit per contract after fees for a sports pick. |
 | `sports_max_disagreement` | `0.10` | Skip when Kalshi and the books differ by more than this (news or mismatch). |
 | `sports_poll_minutes` | `30` | Fastest sports check rate; slowed automatically to fit your credits. |
+| `sports_style` | `"big"` | `"big"`: only big-payout parlays are sent. `"all"`: single picks and every parlay type are sent. |
+| `big_hitter_payouts` | `[25, 50, 100]` | Payout sizes for big-hitter tickets (multiples of the stake). |
+| `parlay_alert_cooldown_hours` | `12` | At most one ticket of each size per this many hours. |
 | `parlays_enabled` | `true` | Turn parlay suggestions on or off. |
 | `parlay_stake` | `20` | Dollars per parlay, used for the payout and paper P&L. |
 | `parlay_longshot_payout` | `50` | A "long shot" pays at least this many times the stake. |

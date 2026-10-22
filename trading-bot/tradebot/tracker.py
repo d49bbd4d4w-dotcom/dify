@@ -191,12 +191,18 @@ class Tracker:
         self.db.commit()
         return settled
 
+    def last_parlay_time(self, kind: str) -> datetime | None:
+        row = self.db.execute("SELECT MAX(ts) FROM parlays WHERE kind=?", (kind,)).fetchone()
+        return datetime.fromisoformat(row[0]) if row and row[0] else None
+
     def parlay_summary(self) -> str | None:
+        from .parlays import title
+
         rows = self.db.execute("SELECT kind, result, stake, pnl, chance FROM parlays").fetchall()
         if not rows:
             return None
         lines = ["=== Parlays (paper, at the quoted leg prices) ==="]
-        for kind in ("safer", "value", "longshot"):
+        for kind in dict.fromkeys(r["kind"] for r in rows):
             done = [r for r in rows if r["kind"] == kind and r["result"] in ("win", "loss")]
             pending = sum(1 for r in rows if r["kind"] == kind and r["result"] is None)
             if not done and not pending:
@@ -205,7 +211,7 @@ class Tracker:
             expected = sum(r["chance"] for r in done)
             staked = sum(r["stake"] for r in done)
             pnl = sum(r["pnl"] for r in done)
-            lines.append(f"{kind:<9} settled {len(done):>3} | hit {wins} (expected ~{expected:.1f})"
+            lines.append(f"{title(kind):<20} settled {len(done):>3} | hit {wins} (expected ~{expected:.1f})"
                          f" | staked ${staked:,.0f} | P&L ${pnl:+,.2f} | pending {pending}")
         return "\n".join(lines)
 

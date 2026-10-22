@@ -8,6 +8,7 @@ lose roughly 99 times out of 100. Every suggestion shows both numbers.
 
 from __future__ import annotations
 
+import itertools
 import math
 from dataclasses import dataclass
 from datetime import datetime
@@ -64,6 +65,12 @@ class Parlay:
 TITLES = {"safer": "SAFER PARLAY", "value": "VALUE PARLAY", "longshot": "LONG-SHOT PARLAY"}
 
 
+def title(kind: str) -> str:
+    if kind.startswith("big"):
+        return f"BIG HITTER · {kind[3:]}x+"
+    return TITLES.get(kind, kind.upper())
+
+
 def legs_from(evaluations: list[SportsEvaluation], cfg: Config) -> list[Leg]:
     """Best qualifying leg per game: passed all safety checks and priced below fair."""
     best: dict[str, Leg] = {}
@@ -114,3 +121,26 @@ def build(legs: list[Leg], cfg: Config) -> list[Parlay]:
         seen.add(p.key)
         good.append(p)
     return good
+
+
+def big_hitters(legs: list[Leg], cfg: Config) -> list[Parlay]:
+    """For each payout size (e.g. 25x, 50x, 100x), the combination of legs most
+    likely to hit. Checks every combination of the best-priced legs, rather than
+    just stacking underdogs, which is the riskiest way to reach a big payout."""
+    pool = sorted(legs, key=lambda leg: leg.value, reverse=True)[:cfg.parlay_candidate_legs]
+    combos = []
+    for k in range(2, min(cfg.parlay_max_legs, len(pool)) + 1):
+        for legs_k in itertools.combinations(pool, k):
+            p = Parlay("", list(legs_k))
+            if p.value >= 1.0 + cfg.parlay_min_value_margin:
+                combos.append((p.chance, p.value, p.payout, p))
+    out: list[Parlay] = []
+    seen: set[str] = set()
+    for target in sorted(cfg.big_hitter_payouts):
+        fits = [c for c in combos if c[2] >= target and c[3].key not in seen]
+        if not fits:
+            continue
+        best = max(fits, key=lambda c: (c[0], c[1]))[3]
+        seen.add(best.key)
+        out.append(Parlay(f"big{target:g}", best.legs))
+    return out

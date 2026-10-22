@@ -29,6 +29,12 @@ sports_max_disagreement = 0.10
 sports_poll_minutes = 30     # slowed down automatically to make your credits last the month
 # sports_series = ["KXNFLGAME", "KXNBAGAME"]   # default: every supported sport
 
+# "big": only big-payout parlays are sent to Telegram (singles still tracked).
+# "all": single picks plus safer / value / long-shot parlays are sent.
+sports_style = "big"
+big_hitter_payouts = [25, 50, 100]   # $500+ / $1,000+ / $2,000+ on a $20 ticket
+parlay_alert_cooldown_hours = 12
+
 # Parlays, built only from legs Kalshi prices below the sharp books (paper-tracked)
 parlays_enabled = true
 parlay_stake = 20.0          # dollars per parlay, for payout and P&L numbers

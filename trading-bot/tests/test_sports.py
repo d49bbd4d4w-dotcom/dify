@@ -104,6 +104,7 @@ class FakeHttp:
 
 
 def cfg(**kw):
+    kw.setdefault("sports_style", "all")
     return Config(odds_api_key="KEY", sports_series=["KXNBAGAME", "KXEPLGAME", "KXNFLGAME"], **kw)
 
 

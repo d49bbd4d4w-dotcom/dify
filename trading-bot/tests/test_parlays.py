@@ -130,3 +130,65 @@ def test_sports_scan_suggests_and_settles_parlay(tmp_path, monkeypatch):
     expected = round(20 / (0.50 * 0.55 * 0.50) - 20, 2)
     assert msg.startswith(f"🎟️ ✅ PARLAY HIT +${expected:,.2f}")
     assert math.isclose(tracker.db.execute("SELECT pnl FROM parlays").fetchone()[0], expected)
+
+
+def test_big_hitters_pick_most_likely_combo_for_each_payout():
+    import itertools
+    cfg = Config(big_hitter_payouts=[25.0, 50.0, 100.0])
+    legs = [leg("FAV1", 0.80, 0.76), leg("FAV2", 0.75, 0.71), leg("FAV3", 0.70, 0.67),
+            leg("MID1", 0.52, 0.48), leg("MID2", 0.50, 0.46), leg("DOG1", 0.30, 0.25),
+            leg("DOG2", 0.28, 0.24), leg("DOG3", 0.35, 0.31), leg("DOG4", 0.17, 0.15)]
+    tickets = parlays.big_hitters(legs, cfg)
+    assert [t.kind for t in tickets] == ["big25", "big50", "big100"]
+    assert len({t.key for t in tickets}) == 3
+    for t, target in zip(tickets, (25, 50, 100)):
+        assert t.payout >= target and t.value >= 1 + cfg.parlay_min_value_margin
+        # No other qualifying combination has a better chance of hitting.
+        for k in range(2, cfg.parlay_max_legs + 1):
+            for combo in itertools.combinations(legs, k):
+                other = parlays.Parlay("", list(combo))
+                if other.payout >= target and other.value >= 1 + cfg.parlay_min_value_margin \
+                        and other.key not in {x.key for x in tickets if x is not t}:
+                    assert other.chance <= t.chance + 1e-12
+    # Safer than just stacking the best-priced underdogs to the same payout.
+    greedy = next(p for p in parlays.build(legs, Config(parlay_longshot_payout=25.0)) if p.kind == "longshot")
+    assert tickets[0].chance >= greedy.chance
+    assert parlays.title("big50") == "BIG HITTER · 50x+"
+
+
+def test_big_hitters_none_when_payout_out_of_reach():
+    cfg = Config(big_hitter_payouts=[25.0])
+    assert parlays.big_hitters([leg("A", 0.80, 0.76), leg("B", 0.75, 0.71)], cfg) == []
+
+
+def big_style_market(monkeypatch, boston_ask=0.55):
+    nba = list(ts.KALSHI["KXNBAGAME"])
+    nba[2] = ts.kmarket(ts.BOS, "BOS", "Boston", boston_ask - 0.02, boston_ask, "Boston at New York Winner?")
+    epl = list(ts.KALSHI["KXEPLGAME"])
+    epl[1] = ts.kmarket(ts.EPL, "ARS", "Arsenal", 0.16, 0.18, "Man City vs Arsenal Winner?")
+    monkeypatch.setitem(ts.KALSHI, "KXNBAGAME", nba)
+    monkeypatch.setitem(ts.KALSHI, "KXEPLGAME", epl)
+
+
+def test_big_style_sends_only_big_hitters_with_cooldown(tmp_path, monkeypatch):
+    big_style_market(monkeypatch)
+    http = ts.FakeHttp()
+    c = ts.cfg(db_path=str(tmp_path / "t.db"), telegram_bot_token="1:x", telegram_chat_id="9",
+               sports_style="big", big_hitter_payouts=[10.0, 20.0])
+    tracker = Tracker(c.db_path)
+    cli.sports_scan(c, http, tracker, verbose=False, notifier=notify.Notifier(http, c))
+    texts = [p["text"] for p in http.posts]
+    # Single picks (LAL, BOS) are tracked but not sent; only the two big hitters are.
+    assert len(tracker.recent_picks()) == 2
+    assert len(texts) == 2 and all("BIG HITTER" in t for t in texts)
+    ten, twenty = texts
+    # 10x+: Boston + Arsenal is the most likely combo (12.6%) that pays 10x.
+    assert "BIG HITTER · 10x+ · 2 legs" in ten and f"{0.60 * 0.21:.1%}" in ten
+    assert "BIG HITTER · 20x+ · 3 legs" in twenty
+
+    # Prices change so a different 10x ticket appears, but one was sent in the
+    # last 12 hours: hold it (not sent, not counted in the paper results).
+    big_style_market(monkeypatch, boston_ask=0.61)
+    cli.sports_scan(c, http, tracker, verbose=True, notifier=notify.Notifier(http, c))
+    assert len(http.posts) == 2
+    assert tracker.db.execute("SELECT COUNT(*) FROM parlays").fetchone()[0] == 2
