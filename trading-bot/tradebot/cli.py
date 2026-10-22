@@ -8,7 +8,7 @@ import time
 from datetime import datetime, timezone
 from zoneinfo import ZoneInfo
 
-from . import analyzer, notify, sports, swing, thesis
+from . import analyzer, notify, parlays, sports, swing, thesis
 from .config import Config, load_config
 from .sources import Http, crypto
 from .sources.kalshi import Kalshi
@@ -94,6 +94,43 @@ def sports_alert_text(e: sports.SportsEvaluation, cfg: Config) -> str:
     return "\n".join(lines) + "\n\nBased on sportsbook prices, not a guarantee. Skip it if the price has moved."
 
 
+def leg_label(leg: parlays.Leg) -> str:
+    return f"{sports.icon(leg.sport_key)} {leg.team} to win ({leg.game})"
+
+
+def money(x: float) -> str:
+    return f"{'-' if x < 0 else '+'}${abs(x):,.2f}"
+
+
+def parlay_text(p: parlays.Parlay, cfg: Config) -> str:
+    stake = cfg.parlay_stake
+    lines = [f"🎟️ {parlays.TITLES[p.kind]} · {len(p.legs)} legs · paper pick"]
+    far = datetime.max.replace(tzinfo=timezone.utc)
+    for i, leg in enumerate(sorted(p.legs, key=lambda x: x.commence or far), 1):
+        when = f" · {local_time(leg.commence, cfg, with_day=True)}" if leg.commence else ""
+        lines.append(f"{i}. {leg_label(leg)} @ {leg.price * 100:.0f}¢{when}")
+    odds = f"about 1 in {1 / p.chance:,.0f}" if p.chance < 0.2 else f"wins about {p.chance * 10:.0f} times in 10"
+    lines += [
+        f"True chance: {p.chance:.1%} ({odds})",
+        f"${stake:,.0f} pays ~${stake * p.payout:,.0f} ({p.payout:,.1f}x) if Kalshi prices it like the legs",
+        f"Only take it if it pays at least {p.min_payout(cfg.parlay_min_value_margin):,.1f}x "
+        f"(${stake * p.min_payout(cfg.parlay_min_value_margin):,.0f})",
+        f"Expected profit: {money(stake * (p.value - 1))} per ${stake:,.0f}"
+        + (f", but most likely you lose the ${stake:,.0f}." if p.chance < 0.5 else "."),
+    ]
+    return "\n".join(lines)
+
+
+def parlay_result_text(p: dict) -> str:
+    n = len(p["legs"])
+    if p["result"] == "win":
+        return f"🎟️ ✅ PARLAY HIT {money(p['pnl'])} ({p['kind']}, {n} legs)"
+    if p["result"] == "void":
+        return f"🎟️ ↩️ PARLAY VOID: every game was cancelled ({p['kind']}, {n} legs)"
+    return (f"🎟️ ❌ PARLAY MISSED {money(p['pnl'])} ({p['kind']}, {n} legs)\n"
+            f"Lost on: {', '.join(p['lost_on'])}")
+
+
 def result_text(p: dict) -> str:
     icon = {"win": "✅ WIN", "loss": "❌ LOSS"}.get(p["result"], "↩️ VOID")
     return (f"{icon} {p['pnl']:+.2f} USD\n{p['title']}\n"
@@ -159,6 +196,18 @@ def sports_scan(cfg: Config, http: Http, tracker: Tracker, verbose: bool,
             notifier.send(sports_alert_text(e, cfg))
     if not picks:
         print("No sports picks right now — Kalshi prices are in line with the sharp books.")
+    if cfg.parlays_enabled:
+        tickets = parlays.build(parlays.legs_from(scan.evaluations, cfg), cfg)
+        for p in tickets:
+            legs = [{"ticker": leg.ticker, "label": leg_label(leg), "p": leg.p, "price": leg.price}
+                    for leg in p.legs]
+            is_new = tracker.log_parlay(p.kind, legs, cfg.parlay_stake, p.chance, p.payout)
+            text = parlay_text(p, cfg)
+            print("\n" + text + ("" if is_new else "\n(already suggested earlier)"))
+            if is_new and notifier:
+                notifier.send(text + "\n\nBased on sportsbook prices, not a guarantee.")
+        if not tickets:
+            print("No parlays right now — not enough legs that Kalshi prices below the sharp books.")
     if verbose:
         for e in scan.evaluations:
             if not e.is_pick:
@@ -194,6 +243,9 @@ def resolve(cfg: Config, http: Http, tracker: Tracker, notifier: notify.Notifier
         if notifier and cfg.notify_results:
             for p in settled:
                 notifier.send(result_text(p))
+    for p in tracker.settle_parlays():
+        if notifier and cfg.notify_results:
+            notifier.send(parlay_result_text(p))
     return n
 
 
@@ -354,6 +406,9 @@ def main(argv: list[str] | None = None) -> None:
         print(f"Scored {resolve(cfg, http, tracker, notifier)} settled market(s).")
     elif args.cmd == "report":
         print("\n\n".join(tracker.report(c).render() for c in tracker.categories()))
+        summary = tracker.parlay_summary()
+        if summary:
+            print("\n" + summary)
         recent = tracker.recent_picks(10)
         if recent:
             print("\nRecent picks:")

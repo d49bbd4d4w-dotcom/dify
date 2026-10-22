@@ -232,6 +232,9 @@ class SportsEvaluation:
     p_yes: float | None
     best: model.Opportunity | None
     skip_reason: str | None
+    # True once the game passed every safety check (fresh prices, not started,
+    # books agree...), even if the edge was too small for a single pick.
+    checked: bool = False
 
     @property
     def market_mid(self) -> float | None:
@@ -278,6 +281,7 @@ def evaluate(m: Market, sport_key: str, game: str, team: str, outcome: str | Non
                            "likely news or a matching problem")
     if out.skip_reason:
         return out
+    out.checked = True
     opps = model.evaluate_sides(out.p_yes, m.yes_ask, m.no_ask, fee_rate=cfg.fee_rate,
                                 bankroll=cfg.bankroll, kelly_multiplier=cfg.kelly_multiplier,
                                 max_stake=cfg.max_stake)

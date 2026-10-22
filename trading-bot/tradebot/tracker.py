@@ -6,6 +6,8 @@ whether the model is actually better than the market. If it isn't, don't trade.
 
 from __future__ import annotations
 
+import json
+import math
 import sqlite3
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
@@ -43,6 +45,22 @@ CREATE TABLE IF NOT EXISTS picks (
     pnl REAL,
     category TEXT NOT NULL DEFAULT 'btc',
     UNIQUE(ticker, side)
+);
+CREATE TABLE IF NOT EXISTS outcomes (
+    ticker TEXT PRIMARY KEY,
+    result TEXT NOT NULL  -- 'yes' / 'no' / 'void'
+);
+CREATE TABLE IF NOT EXISTS parlays (
+    id INTEGER PRIMARY KEY,
+    ts TEXT NOT NULL,
+    kind TEXT NOT NULL,
+    leg_key TEXT NOT NULL UNIQUE,
+    legs TEXT NOT NULL,  -- JSON list of {ticker, label, p, price}
+    stake REAL NOT NULL,
+    chance REAL NOT NULL,
+    payout REAL NOT NULL,  -- per $1 staked
+    result TEXT,  -- 'win' / 'loss' / 'void' / NULL
+    pnl REAL
 );
 """
 
@@ -105,11 +123,16 @@ class Tracker:
             "SELECT DISTINCT ticker FROM picks WHERE result IS NULL AND ts > ?"
             " UNION SELECT DISTINCT ticker FROM evaluations WHERE outcome IS NULL AND ts > ?",
             (since, since)).fetchall()
-        return [r["ticker"] for r in rows]
+        tickers = {r["ticker"] for r in rows}
+        known = {r[0] for r in self.db.execute("SELECT ticker FROM outcomes")}
+        for p in self.db.execute("SELECT legs FROM parlays WHERE result IS NULL AND ts > ?", (since,)):
+            tickers |= {leg["ticker"] for leg in json.loads(p[0])} - known
+        return sorted(tickers)
 
     def record_outcome(self, ticker: str, result: str, fee_rate: float = 0.07) -> list[dict]:
         """result is Kalshi's 'yes' or 'no'. Returns the picks that just settled."""
         yes = 1 if result == "yes" else 0
+        self.db.execute("INSERT OR REPLACE INTO outcomes(ticker, result) VALUES (?,?)", (ticker, result))
         self.db.execute("UPDATE evaluations SET outcome=? WHERE ticker=? AND outcome IS NULL", (yes, ticker))
         settled = []
         for p in self.db.execute("SELECT * FROM picks WHERE ticker=? AND result IS NULL", (ticker,)).fetchall():
@@ -127,10 +150,64 @@ class Tracker:
         """Market was cancelled (e.g. game postponed): stakes are refunded. Returns the voided picks."""
         voided = [{**dict(p), "result": "void", "pnl": 0.0} for p in self.db.execute(
             "SELECT * FROM picks WHERE ticker=? AND result IS NULL", (ticker,)).fetchall()]
+        self.db.execute("INSERT OR REPLACE INTO outcomes(ticker, result) VALUES (?, 'void')", (ticker,))
         self.db.execute("UPDATE evaluations SET outcome=-1 WHERE ticker=? AND outcome IS NULL", (ticker,))
         self.db.execute("UPDATE picks SET result='void', pnl=0 WHERE ticker=? AND result IS NULL", (ticker,))
         self.db.commit()
         return voided
+
+    def log_parlay(self, kind: str, legs: list[dict], stake: float, chance: float, payout: float) -> bool:
+        """Record a suggested parlay. Returns False if the same legs were already suggested."""
+        key = ",".join(sorted(leg["ticker"] for leg in legs))
+        cur = self.db.execute(
+            "INSERT OR IGNORE INTO parlays(ts, kind, leg_key, legs, stake, chance, payout) VALUES (?,?,?,?,?,?,?)",
+            (_now(), kind, key, json.dumps(legs), stake, chance, payout))
+        self.db.commit()
+        return cur.rowcount > 0
+
+    def settle_parlays(self) -> list[dict]:
+        """Grade open parlays whose legs are decided. A cancelled leg drops out
+        (its price is taken out of the payout), as sportsbooks do."""
+        results = dict(self.db.execute("SELECT ticker, result FROM outcomes").fetchall())
+        settled = []
+        for row in self.db.execute("SELECT * FROM parlays WHERE result IS NULL").fetchall():
+            legs = json.loads(row["legs"])
+            outcomes = [results.get(leg["ticker"]) for leg in legs]
+            if "no" in outcomes:
+                result, pnl = "loss", -row["stake"]
+            elif None in outcomes:
+                continue  # still waiting on a game
+            else:
+                live = [leg for leg, o in zip(legs, outcomes) if o == "yes"]
+                if not live:
+                    result, pnl = "void", 0.0
+                else:
+                    result = "win"
+                    pnl = row["stake"] / math.prod(leg["price"] for leg in live) - row["stake"]
+            pnl = round(pnl, 2)
+            self.db.execute("UPDATE parlays SET result=?, pnl=? WHERE id=?", (result, pnl, row["id"]))
+            lost_on = [leg["label"] for leg, o in zip(legs, outcomes) if o == "no"]
+            settled.append({**dict(row), "legs": legs, "result": result, "pnl": pnl, "lost_on": lost_on})
+        self.db.commit()
+        return settled
+
+    def parlay_summary(self) -> str | None:
+        rows = self.db.execute("SELECT kind, result, stake, pnl, chance FROM parlays").fetchall()
+        if not rows:
+            return None
+        lines = ["=== Parlays (paper, at the quoted leg prices) ==="]
+        for kind in ("safer", "value", "longshot"):
+            done = [r for r in rows if r["kind"] == kind and r["result"] in ("win", "loss")]
+            pending = sum(1 for r in rows if r["kind"] == kind and r["result"] is None)
+            if not done and not pending:
+                continue
+            wins = sum(1 for r in done if r["result"] == "win")
+            expected = sum(r["chance"] for r in done)
+            staked = sum(r["stake"] for r in done)
+            pnl = sum(r["pnl"] for r in done)
+            lines.append(f"{kind:<9} settled {len(done):>3} | hit {wins} (expected ~{expected:.1f})"
+                         f" | staked ${staked:,.0f} | P&L ${pnl:+,.2f} | pending {pending}")
+        return "\n".join(lines)
 
     def recent_picks(self, limit: int = 20) -> list[sqlite3.Row]:
         return self.db.execute("SELECT * FROM picks ORDER BY id DESC LIMIT ?", (limit,)).fetchall()

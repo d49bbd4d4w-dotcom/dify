@@ -181,6 +181,40 @@ Starts Thu Oct 22 12:21 PM PDT
 Ticker: KXNBAGAME-26OCT22LALLAC-LAL
 ```
 
+### Parlays
+
+Each sports check can also suggest up to three parlays. They're built only from legs that pass every safety check above and that Kalshi sells below the sharp-book price, with one leg per game:
+
+| Ticket | Built from | Typical chance | Typical payout on $20 |
+|---|---|---|---|
+| 🎟️ **Safer** | 2–3 favorites (each 65%+ to win) | 30–50% | $40–$70 |
+| 🎟️ **Value** | up to 4 of the best-priced legs, each 40%+ | 10–25% | $80–$200 |
+| 🎟️ **Long shot** | best-priced legs until it pays 50x+ | about 1 in 50 to 1 in 200 | $1,000+ |
+
+Example:
+
+```
+🎟️ LONG-SHOT PARLAY · 3 legs · paper pick
+1. ⚽ Brentford to win (Brentford at Liverpool) @ 15¢ · Thu Oct 22 3:00 AM PDT
+2. 🏀 Orlando to win (Orlando at Boston) @ 27¢ · Thu Oct 22 4:00 PM PDT
+3. 🏒 San Jose to win (San Jose at Edmonton) @ 24¢ · Thu Oct 22 7:00 PM PDT
+True chance: 1.4% (about 1 in 70)
+$20 pays ~$2,058 (102.9x) if Kalshi prices it like the legs
+Only take it if it pays at least 72.4x ($1,448)
+Expected profit: +$9.28 per $20, but most likely you lose the $20.
+```
+
+**There's always a tradeoff between chance and payout.** A parlay only pays if every leg wins, so each leg you add shrinks the chance of hitting. A $20 ticket that pays $2,000 has to lose about 99 times out of 100; if it didn't, the market would charge more for it. What the bot adds is that every leg is priced *below* its fair chance. A parlay multiplies that edge, so the *average* result is positive. Most individual tickets will still lose.
+
+For example, a 1-in-70 long shot played once a day goes a whole month without hitting about 65% of the time.
+
+**How to use the numbers:**
+- **True chance** comes from the sharp sportsbooks, with the bookmaker margin removed.
+- **Payout** is estimated by multiplying the single-game Kalshi prices. The bot can't see the price Kalshi would charge for a combined bet.
+- **"Only take it if it pays at least"** is the lowest payout that still leaves an edge. If Kalshi's app lets you combine these games into one bet, compare its payout with this number. If it pays less, skip it. If the app doesn't offer that combination, there's no way to place it on Kalshi.
+
+Parlays are paper-tracked like everything else. You get a 🎟️ ✅ HIT or ❌ MISSED message (with the leg that lost), and `report` shows each kind's hits next to how many you'd *expect* by chance. A cancelled game drops out of the parlay, the same way sportsbooks handle it.
+
 ### About Odds API credits
 
 Each sports check costs 1 credit per sport that has games on Kalshi. Sports that are out of season, or that have no Kalshi games, cost nothing. The **free plan has 500 credits a month**, enough for a few full checks per day. The bot automatically **slows its sports checks down to make your credits last the whole month**, and tells you when it does. If you want sports checked every 30 minutes all month, their $30/month plan (20,000 credits) covers it.
@@ -207,6 +241,9 @@ Start by running it **on your own computer**. Leave `watch` running in a termina
 | `sports_min_edge` | `0.02` | Minimum profit per contract after fees for a sports pick. |
 | `sports_max_disagreement` | `0.10` | Skip when Kalshi and the books differ by more than this (news or mismatch). |
 | `sports_poll_minutes` | `30` | Fastest sports check rate; slowed automatically to fit your credits. |
+| `parlays_enabled` | `true` | Turn parlay suggestions on or off. |
+| `parlay_stake` | `20` | Dollars per parlay, used for the payout and paper P&L. |
+| `parlay_longshot_payout` | `50` | A "long shot" pays at least this many times the stake. |
 | `sports_series` | auto | Limit to certain Kalshi series, e.g. `["KXNFLGAME", "KXNBAGAME"]`. |
 | `timezone` | `America/Los_Angeles` | Timezone for times in alerts. |
 
@@ -217,7 +254,7 @@ pip install -r requirements-dev.txt
 python -m pytest
 ```
 
-Code layout: `tradebot/model.py` holds the probability, fee and sizing math. `analyzer.py` turns market data into picks. `sources/` holds the data fetchers. `tracker.py` handles the SQLite log and scoring. `sports.py` matches Kalshi games to sportsbook games and prices them. `swing.py` is the spot view, and `thesis.py` writes the Claude explanations.
+Code layout: `tradebot/model.py` holds the probability, fee and sizing math. `analyzer.py` turns market data into picks. `sources/` holds the data fetchers. `tracker.py` handles the SQLite log and scoring. `sports.py` matches Kalshi games to sportsbook games and prices them. `parlays.py` builds parlays from those legs. `swing.py` is the spot view, and `thesis.py` writes the Claude explanations.
 
 ### Ideas for later
 

@@ -29,6 +29,11 @@ sports_max_disagreement = 0.10
 sports_poll_minutes = 30     # slowed down automatically to make your credits last the month
 # sports_series = ["KXNFLGAME", "KXNBAGAME"]   # default: every supported sport
 
+# Parlays, built only from legs Kalshi prices below the sharp books (paper-tracked)
+parlays_enabled = true
+parlay_stake = 20.0          # dollars per parlay, for payout and P&L numbers
+parlay_longshot_payout = 50  # a "long shot" ticket pays at least 50x
+
 timezone = "America/Los_Angeles"   # for times shown in alerts
 
 # Alerts. Easiest is to set the environment variables TELEGRAM_BOT_TOKEN and

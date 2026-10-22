@@ -66,6 +66,17 @@ class Config:
     sports_include_live: bool = False  # in-game betting is riskier; off by default
     sports_poll_minutes: float = 30.0  # slowed down automatically to fit your Odds API plan
 
+    # Parlays built from sports legs priced below the sharp books (paper-tracked).
+    parlays_enabled: bool = True
+    parlay_stake: float = 20.0  # dollars per parlay, for the payout and P&L numbers
+    parlay_min_leg_edge: float = 0.01  # each leg's fair chance must beat its price by this
+    parlay_min_value_margin: float = 0.03  # parlay must return >= 3% more than it costs, on average
+    parlay_safe_min_leg_prob: float = 0.65  # "safer" parlays only use favorites like this
+    parlay_value_min_leg_prob: float = 0.40  # "value" parlays skip big underdogs...
+    parlay_value_min_chance: float = 0.10  # ...and keep at least a 10% chance of hitting
+    parlay_longshot_payout: float = 50.0  # "long shot" = pays at least 50x
+    parlay_max_legs: int = 8
+
     timezone: str = "America/Los_Angeles"  # for times shown in alerts
 
     # Alerts. Prefer the TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID / DISCORD_WEBHOOK_URL
