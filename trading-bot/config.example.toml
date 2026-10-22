@@ -1,0 +1,26 @@
+# Copy to config.toml and edit. Every key is optional; defaults shown.
+[tradebot]
+# Kalshi series to scan. KXBTC15M = 15-minute BTC up/down.
+# Add "KXBTCD" for the hourly/daily "BTC above $X" ladder.
+series = ["KXBTC15M"]
+
+min_edge = 0.03          # need >= 3 cents expected profit per contract after fees
+min_minutes_left = 2.0   # ignore markets about to close
+max_spread = 0.10        # ignore illiquid markets
+max_disagreement = 0.25  # if model and market differ this much, assume we're missing info
+
+vol_multiplier = 1.15    # >1 = assume fatter tails than the recent data shows
+momentum_weight = 0.0    # experimental; leave at 0 until `report` proves it helps
+
+bankroll = 100.0         # dollars you're willing to put at risk on this, total
+kelly_multiplier = 0.25  # quarter-Kelly sizing
+max_stake = 10.0         # never suggest more than this per pick
+
+db_path = "tradebot.db"
+
+# Claude write-ups (only used with --explain and ANTHROPIC_API_KEY set)
+thesis_model = "claude-opus-5-5"
+thesis_effort = "low"
+
+# Optional: paste a Discord webhook URL to get picks on your phone
+discord_webhook_url = ""
